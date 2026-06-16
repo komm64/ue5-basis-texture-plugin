@@ -11,7 +11,7 @@
 namespace
 {
     constexpr uint32 NativeCacheMagic = 0x424E5443; // BNTC
-    constexpr int32 NativeCacheVersion = 1;
+    constexpr int32 NativeCacheVersion = 2;
     static const TCHAR* NativeCacheTargetProfile = TEXT("desktop_bc1_bc7");
 
     FString GetNativeCachePath(const UBasisTexture* Texture)
@@ -33,6 +33,7 @@ namespace
 
         uint32 Magic = NativeCacheMagic;
         int32 Version = NativeCacheVersion;
+        FString TargetProfile = NativeCacheTargetProfile;
         int32 Width = Info.Width;
         int32 Height = Info.Height;
         int32 MipLevels = Info.MipLevels;
@@ -45,6 +46,7 @@ namespace
 
         Ar << Magic;
         Ar << Version;
+        Ar << TargetProfile;
         Ar << Width;
         Ar << Height;
         Ar << MipLevels;
@@ -57,10 +59,24 @@ namespace
         Ar.Serialize(const_cast<uint8*>(NativeBlocks.GetData()), NativeBlockSize);
 
         IFileManager::Get().MakeDirectory(*FPaths::GetPath(CachePath), true);
-        const bool bSaved = FFileHelper::SaveArrayToFile(Ar, *CachePath);
+        const FString TempPath = CachePath + TEXT(".tmp");
+        IFileManager::Get().Delete(*TempPath);
+
+        const bool bSaved = FFileHelper::SaveArrayToFile(Ar, *TempPath);
         Ar.FlushCache();
         Ar.Empty();
-        return bSaved;
+        if (!bSaved)
+        {
+            IFileManager::Get().Delete(*TempPath);
+            return false;
+        }
+
+        const bool bMoved = IFileManager::Get().Move(*CachePath, *TempPath, true, true);
+        if (!bMoved)
+        {
+            IFileManager::Get().Delete(*TempPath);
+        }
+        return bMoved;
     }
 
     bool LoadNativeCache(
@@ -78,6 +94,7 @@ namespace
 
         uint32 Magic = 0;
         int32 Version = 0;
+        FString TargetProfile;
         int32 Width = 0;
         int32 Height = 0;
         int32 MipLevels = 0;
@@ -90,6 +107,7 @@ namespace
 
         Ar << Magic;
         Ar << Version;
+        Ar << TargetProfile;
         Ar << Width;
         Ar << Height;
         Ar << MipLevels;
@@ -100,7 +118,10 @@ namespace
         Ar << TranscodedFormat;
         Ar << NativeBlockSize;
 
-        if (Ar.IsError() || Magic != NativeCacheMagic || Version != NativeCacheVersion)
+        if (Ar.IsError()
+            || Magic != NativeCacheMagic
+            || Version != NativeCacheVersion
+            || TargetProfile != NativeCacheTargetProfile)
         {
             return false;
         }
@@ -258,12 +279,38 @@ void UBasisTexture::WarmNativeCacheForTextures(
     int32& OutFailed,
     int64& OutCacheSizeBytes)
 {
+    int32 NextIndex = 0;
+    WarmNativeCacheForTexturesBudgeted(
+        Textures,
+        0,
+        Textures.Num(),
+        NextIndex,
+        OutSucceeded,
+        OutFailed,
+        OutCacheSizeBytes);
+}
+
+bool UBasisTexture::WarmNativeCacheForTexturesBudgeted(
+    const TArray<UBasisTexture*>& Textures,
+    int32 StartIndex,
+    int32 MaxTextures,
+    int32& OutNextIndex,
+    int32& OutSucceeded,
+    int32& OutFailed,
+    int64& OutCacheSizeBytes)
+{
     OutSucceeded = 0;
     OutFailed = 0;
     OutCacheSizeBytes = 0;
 
-    for (UBasisTexture* Texture : Textures)
+    const int32 SafeStartIndex = FMath::Clamp(StartIndex, 0, Textures.Num());
+    const int32 RemainingTextures = Textures.Num() - SafeStartIndex;
+    const int32 TextureBudget = FMath::Clamp(MaxTextures, 0, RemainingTextures);
+    const int32 EndIndex = SafeStartIndex + TextureBudget;
+
+    for (int32 Index = SafeStartIndex; Index < EndIndex; ++Index)
     {
+        UBasisTexture* Texture = Textures[Index];
         if (!Texture)
         {
             ++OutFailed;
@@ -280,6 +327,9 @@ void UBasisTexture::WarmNativeCacheForTextures(
             ++OutFailed;
         }
     }
+
+    OutNextIndex = EndIndex;
+    return OutNextIndex >= Textures.Num();
 }
 
 void UBasisTexture::ClearNativeCacheForTextures(

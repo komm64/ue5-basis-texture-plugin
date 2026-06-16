@@ -92,6 +92,21 @@ public:
         int32& OutFailed,
         int64& OutCacheSizeBytes);
 
+    /**
+     * Warm part of a texture list. Call repeatedly from a loading screen until it returns true.
+     * MaxTextures is a per-call budget; values <= 0 perform no work.
+     * @return True when all entries have been processed.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static bool WarmNativeCacheForTexturesBudgeted(
+        const TArray<UBasisTexture*>& Textures,
+        int32 StartIndex,
+        int32 MaxTextures,
+        int32& OutNextIndex,
+        int32& OutSucceeded,
+        int32& OutFailed,
+        int64& OutCacheSizeBytes);
+
     /** Clear native caches for a batch of Basis textures. */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
     static void ClearNativeCacheForTextures(

@@ -107,7 +107,7 @@ Footprint-Optimized mode keeps both download size and installed size small. It i
 
 Download-Optimized Native Cache mode keeps the installer small, then generates platform-native GPU blocks after install or first launch. Installed size grows toward the native BC/ASTC footprint, but subsequent loads skip Basis transcoding and behave closer to ordinary native textures.
 
-The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, or call `WarmNativeCacheForTextures()` during a first-launch preparation step to populate `Saved/BasisNativeCache` up front.
+The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, call `WarmNativeCacheForTextures()` during a first-launch preparation step, or call `WarmNativeCacheForTexturesBudgeted()` repeatedly from a loading screen to populate `Saved/BasisNativeCache` in small batches.
 
 ---
 
@@ -227,7 +227,8 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 - **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
 - Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
 - `RuntimeStorageMode` controls whether an imported asset stays in Footprint-Optimized mode or writes native GPU blocks into `Saved/BasisNativeCache` for Download-Optimized Native Cache mode.
-- `WarmNativeCache()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
+- `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
+- Native cache files include a cache version and target GPU profile, are written through a temporary file, and are discarded/regenerated when invalid or stale.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
