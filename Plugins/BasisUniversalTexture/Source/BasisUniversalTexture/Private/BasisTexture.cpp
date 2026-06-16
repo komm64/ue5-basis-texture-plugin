@@ -132,6 +132,34 @@ namespace
         OutInfo.TranscodedFormat = TranscodedFormat;
         return true;
     }
+
+    bool BuildNativeCache(
+        const UBasisTexture* Texture,
+        const FString& CachePath,
+        FBasisTranscodeInfo& OutInfo,
+        TArray<uint8>& OutNativeBlocks,
+        bool& bOutCacheSaved)
+    {
+        bOutCacheSaved = false;
+
+        if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
+                Texture->BasisData, Texture->GetName(), OutInfo, OutNativeBlocks))
+        {
+            return false;
+        }
+
+        if (SaveNativeCache(CachePath, OutInfo, OutNativeBlocks))
+        {
+            UE_LOG(LogTemp, Log, TEXT("UBasisTexture: native cache saved: %s"), *CachePath);
+            bOutCacheSaved = true;
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("UBasisTexture: failed to save native cache: %s"), *CachePath);
+        }
+
+        return true;
+    }
 }
 
 UTexture2D* UBasisTexture::Transcode()
@@ -165,19 +193,118 @@ UTexture2D* UBasisTexture::Transcode()
         Info = FBasisTranscodeInfo();
     }
 
-    if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(BasisData, GetName(), Info, NativeBlocks))
+    bool bCacheSaved = false;
+    if (!BuildNativeCache(this, CachePath, Info, NativeBlocks, bCacheSaved))
     {
         return nullptr;
     }
 
-    if (SaveNativeCache(CachePath, Info, NativeBlocks))
+    return UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName());
+}
+
+bool UBasisTexture::WarmNativeCache()
+{
+    if (BasisData.Num() == 0)
     {
-        UE_LOG(LogTemp, Log, TEXT("UBasisTexture::Transcode: native cache saved: %s"), *CachePath);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("UBasisTexture::Transcode: failed to save native cache: %s"), *CachePath);
+        UE_LOG(LogTemp, Warning, TEXT("UBasisTexture::WarmNativeCache: no data"));
+        return false;
     }
 
-    return UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName());
+    FBasisTranscodeInfo Info;
+    TArray<uint8> NativeBlocks;
+    const FString CachePath = GetNativeCachePath(this);
+    if (LoadNativeCache(CachePath, Info, NativeBlocks))
+    {
+        return true;
+    }
+    if (FPaths::FileExists(CachePath))
+    {
+        IFileManager::Get().Delete(*CachePath);
+    }
+
+    bool bCacheSaved = false;
+    if (!BuildNativeCache(this, CachePath, Info, NativeBlocks, bCacheSaved))
+    {
+        return false;
+    }
+    return bCacheSaved;
+}
+
+bool UBasisTexture::ClearNativeCache()
+{
+    const FString CachePath = GetNativeCachePath(this);
+    if (!FPaths::FileExists(CachePath))
+    {
+        return true;
+    }
+
+    return IFileManager::Get().Delete(*CachePath);
+}
+
+bool UBasisTexture::HasNativeCache() const
+{
+    return FPaths::FileExists(GetNativeCachePath(this));
+}
+
+int64 UBasisTexture::GetNativeCacheSizeBytes() const
+{
+    const FFileStatData StatData = IFileManager::Get().GetStatData(*GetNativeCachePath(this));
+    return StatData.bIsValid ? StatData.FileSize : 0;
+}
+
+void UBasisTexture::WarmNativeCacheForTextures(
+    const TArray<UBasisTexture*>& Textures,
+    int32& OutSucceeded,
+    int32& OutFailed,
+    int64& OutCacheSizeBytes)
+{
+    OutSucceeded = 0;
+    OutFailed = 0;
+    OutCacheSizeBytes = 0;
+
+    for (UBasisTexture* Texture : Textures)
+    {
+        if (!Texture)
+        {
+            ++OutFailed;
+            continue;
+        }
+
+        if (Texture->WarmNativeCache())
+        {
+            ++OutSucceeded;
+            OutCacheSizeBytes += Texture->GetNativeCacheSizeBytes();
+        }
+        else
+        {
+            ++OutFailed;
+        }
+    }
+}
+
+void UBasisTexture::ClearNativeCacheForTextures(
+    const TArray<UBasisTexture*>& Textures,
+    int32& OutCleared,
+    int32& OutFailed)
+{
+    OutCleared = 0;
+    OutFailed = 0;
+
+    for (UBasisTexture* Texture : Textures)
+    {
+        if (!Texture)
+        {
+            ++OutFailed;
+            continue;
+        }
+
+        if (Texture->ClearNativeCache())
+        {
+            ++OutCleared;
+        }
+        else
+        {
+            ++OutFailed;
+        }
+    }
 }

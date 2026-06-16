@@ -65,6 +65,40 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Basis Universal")
     UTexture2D* Transcode();
 
+    /**
+     * Generate or refresh this asset's native GPU block cache.
+     * This keeps the shipping payload small while avoiding Basis transcode cost on later loads.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    bool WarmNativeCache();
+
+    /** Delete this asset's native GPU block cache, if present. */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    bool ClearNativeCache();
+
+    /** True when this asset already has a native GPU block cache on disk. */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal|Native Cache")
+    bool HasNativeCache() const;
+
+    /** Size of this asset's native GPU block cache on disk, or 0 when absent. */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal|Native Cache")
+    int64 GetNativeCacheSizeBytes() const;
+
+    /** Warm native caches for a batch of Basis textures, useful for first-launch or install-finalization flows. */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void WarmNativeCacheForTextures(
+        const TArray<UBasisTexture*>& Textures,
+        int32& OutSucceeded,
+        int32& OutFailed,
+        int64& OutCacheSizeBytes);
+
+    /** Clear native caches for a batch of Basis textures. */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void ClearNativeCacheForTextures(
+        const TArray<UBasisTexture*>& Textures,
+        int32& OutCleared,
+        int32& OutFailed);
+
     /** Compression ratio: TranscodedSize / CompressedSize */
     UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal")
     float GetCompressionRatio() const
