@@ -36,9 +36,9 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
     // Read metadata through the same in-memory path used at runtime.
     {
         FBasisTranscodeInfo Info;
-        UTexture2D* MetadataTexture =
-            UBasisTextureLoader::LoadBasisTextureFromMemory(Asset->BasisData, InName.ToString(), Info);
-        if (!MetadataTexture)
+        TArray<uint8> NativeBlocks;
+        if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
+                Asset->BasisData, InName.ToString(), Info, NativeBlocks))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureFactory: failed to import %s"), *InName.ToString());
             return nullptr;

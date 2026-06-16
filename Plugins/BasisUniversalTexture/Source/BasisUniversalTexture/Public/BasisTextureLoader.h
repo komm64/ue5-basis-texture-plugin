@@ -80,6 +80,24 @@ public:
         FBasisTranscodeInfo& OutInfo);
 
     /**
+     * Transcode Basis Universal bytes to platform-native compressed GPU blocks.
+     * This does not create a UTexture2D and can be used to populate a native cache.
+     */
+    static bool TranscodeBasisTextureToNativeBlocks(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        FBasisTranscodeInfo& OutInfo,
+        TArray<uint8>& OutNativeBlocks);
+
+    /**
+     * Create a transient UTexture2D from native compressed GPU blocks.
+     */
+    static UTexture2D* CreateTextureFromNativeBlocks(
+        const TArray<uint8>& NativeBlocks,
+        const FBasisTranscodeInfo& Info,
+        const FString& SourceName);
+
+    /**
      * Estimate how large an equivalent BC7 texture would be for a given resolution.
      * Kept for Blueprint compatibility with the original demo HUD.
      */

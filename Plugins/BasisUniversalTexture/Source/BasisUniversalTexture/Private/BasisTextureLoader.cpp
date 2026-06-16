@@ -60,12 +60,28 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
     const FString& SourceName,
     FBasisTranscodeInfo& OutInfo)
 {
+    TArray<uint8> NativeBlocks;
+    if (!TranscodeBasisTextureToNativeBlocks(SourceData, SourceName, OutInfo, NativeBlocks))
+    {
+        return nullptr;
+    }
+
+    return CreateTextureFromNativeBlocks(NativeBlocks, OutInfo, SourceName);
+}
+
+bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
+    const TArray<uint8>& SourceData,
+    const FString& SourceName,
+    FBasisTranscodeInfo& OutInfo,
+    TArray<uint8>& OutNativeBlocks)
+{
     OutInfo = FBasisTranscodeInfo();
+    OutNativeBlocks.Reset();
 
     if (SourceData.Num() == 0)
     {
         UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: no source data: %s"), *SourceName);
-        return nullptr;
+        return false;
     }
 
     OutInfo.CompressedFileSize = SourceData.Num();
@@ -75,7 +91,6 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
     const bool bIsNormalMap = SourceName.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
 
     uint32 Width = 0, Height = 0;
-    TArray<uint8> Pixels;
 
     // ---- 2. Detect format and transcode ------------------------------
     if (IsKTX2(pData, DataSize))
@@ -85,12 +100,12 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
         if (!KTrans.init(pData, DataSize))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 init failed: %s"), *SourceName);
-            return nullptr;
+            return false;
         }
         if (!KTrans.start_transcoding())
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 start_transcoding failed"));
-            return nullptr;
+            return false;
         }
 
         Width  = KTrans.get_width();
@@ -116,15 +131,15 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
             const uint32 BlocksX   = (Width  + 3) / 4;
             const uint32 BlocksY   = (Height + 3) / 4;
             const uint32 NumBlocks = BlocksX * BlocksY;
-            Pixels.SetNumUninitialized(NumBlocks * 16);
+            OutNativeBlocks.SetNumUninitialized(NumBlocks * 16);
 
             if (!KTrans.transcode_image_level(
                     0, 0, 0,
-                    Pixels.GetData(), NumBlocks,
+                    OutNativeBlocks.GetData(), NumBlocks,
                     basist::transcoder_texture_format::cTFBC7_RGBA))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC7 transcode failed"));
-                return nullptr;
+                return false;
             }
         }
         else
@@ -134,15 +149,15 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
             const uint32 BlocksX   = (Width  + 3) / 4;
             const uint32 BlocksY   = (Height + 3) / 4;
             const uint32 NumBlocks = BlocksX * BlocksY;
-            Pixels.SetNumUninitialized(NumBlocks * 8);
+            OutNativeBlocks.SetNumUninitialized(NumBlocks * 8);
 
             if (!KTrans.transcode_image_level(
                     0, 0, 0,
-                    Pixels.GetData(), NumBlocks,
+                    OutNativeBlocks.GetData(), NumBlocks,
                     basist::transcoder_texture_format::cTFBC1_RGB))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC1 transcode failed"));
-                return nullptr;
+                return false;
             }
         }
     }
@@ -153,26 +168,26 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
         if (!Trans.validate_header(pData, DataSize))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: invalid .basis header: %s"), *SourceName);
-            return nullptr;
+            return false;
         }
 
         basist::basisu_file_info FileInfo;
         if (!Trans.get_file_info(pData, DataSize, FileInfo))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: get_file_info failed"));
-            return nullptr;
+            return false;
         }
         if (!Trans.start_transcoding(pData, DataSize))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: start_transcoding failed"));
-            return nullptr;
+            return false;
         }
 
         basist::basisu_image_info ImgInfo;
         if (!Trans.get_image_info(pData, DataSize, ImgInfo, 0))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: get_image_info failed"));
-            return nullptr;
+            return false;
         }
 
         Width  = ImgInfo.m_width;
@@ -191,64 +206,32 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
         if (bIsNormalMap)
         {
             OutInfo.TranscodedFormat = TEXT("BC7_RGBA");
-            Pixels.SetNumUninitialized(NumBlocks * 16);
+            OutNativeBlocks.SetNumUninitialized(NumBlocks * 16);
 
             if (!Trans.transcode_image_level(
                     pData, DataSize, 0, 0,
-                    Pixels.GetData(), NumBlocks,
+                    OutNativeBlocks.GetData(), NumBlocks,
                     basist::transcoder_texture_format::cTFBC7_RGBA))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: BC7 transcode failed"));
-                return nullptr;
+                return false;
             }
         }
         else
         {
             OutInfo.TranscodedFormat = TEXT("BC1_RGB");
-            Pixels.SetNumUninitialized(NumBlocks * 8);
+            OutNativeBlocks.SetNumUninitialized(NumBlocks * 8);
 
             if (!Trans.transcode_image_level(
                     pData, DataSize, 0, 0,
-                    Pixels.GetData(), NumBlocks,
+                    OutNativeBlocks.GetData(), NumBlocks,
                     basist::transcoder_texture_format::cTFBC1_RGB))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: BC1 transcode failed"));
-                return nullptr;
+                return false;
             }
         }
     }
-
-    // ---- 4. Create UTexture2D ----------------------------------------
-    // Normal maps use BC7 as a transient-texture workaround; BC5 remains the
-    // intended production target once integrated into the UE texture pipeline.
-    const EPixelFormat PixelFmt = bIsNormalMap ? PF_BC7 : PF_DXT1;
-
-    UTexture2D* Texture = UTexture2D::CreateTransient(Width, Height, PixelFmt);
-    if (!Texture)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: CreateTransient failed"));
-        return nullptr;
-    }
-
-    // Write pixel data into mip 0
-    {
-        FTexture2DMipMap& Mip0 = Texture->GetPlatformData()->Mips[0];
-        void* MipData = Mip0.BulkData.Lock(LOCK_READ_WRITE);
-        FMemory::Memcpy(MipData, Pixels.GetData(), Pixels.Num());
-        Mip0.BulkData.Unlock();
-    }
-
-    if (bIsNormalMap)
-    {
-        Texture->CompressionSettings = TC_Normalmap;
-        Texture->SRGB = false;
-    }
-    else
-    {
-        Texture->SRGB = true;
-    }
-    Texture->NeverStream = true;
-    Texture->UpdateResource();
 
     // ---- 5. Fill stats -----------------------------------------------
     const int32 BytesPerBlock = bIsNormalMap ? 16 : 8;
@@ -265,6 +248,74 @@ UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
         OutInfo.CompressedFileSize,
         OutInfo.TranscodedSize,
         OutInfo.CompressionRatio);
+
+    return true;
+}
+
+UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
+    const TArray<uint8>& NativeBlocks,
+    const FBasisTranscodeInfo& Info,
+    const FString& SourceName)
+{
+    if (Info.Width <= 0 || Info.Height <= 0 || Info.TranscodedSize <= 0)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("BasisTextureLoader: invalid native texture metadata for %s"),
+            *SourceName);
+        return nullptr;
+    }
+    if (NativeBlocks.Num() != Info.TranscodedSize)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("BasisTextureLoader: native block size mismatch for %s: got=%d expected=%lld"),
+            *SourceName, NativeBlocks.Num(), Info.TranscodedSize);
+        return nullptr;
+    }
+
+    const bool bIsNormalMap = SourceName.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
+    EPixelFormat PixelFmt = PF_Unknown;
+    if (Info.TranscodedFormat == TEXT("BC7_RGBA"))
+    {
+        PixelFmt = PF_BC7;
+    }
+    else if (Info.TranscodedFormat == TEXT("BC1_RGB"))
+    {
+        PixelFmt = PF_DXT1;
+    }
+
+    if (PixelFmt == PF_Unknown)
+    {
+        UE_LOG(LogTemp, Warning,
+            TEXT("BasisTextureLoader: unsupported native block format for %s: %s"),
+            *SourceName, *Info.TranscodedFormat);
+        return nullptr;
+    }
+
+    UTexture2D* Texture = UTexture2D::CreateTransient(Info.Width, Info.Height, PixelFmt);
+    if (!Texture)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: CreateTransient failed"));
+        return nullptr;
+    }
+
+    {
+        FTexture2DMipMap& Mip0 = Texture->GetPlatformData()->Mips[0];
+        void* MipData = Mip0.BulkData.Lock(LOCK_READ_WRITE);
+        FMemory::Memcpy(MipData, NativeBlocks.GetData(), NativeBlocks.Num());
+        Mip0.BulkData.Unlock();
+    }
+
+    if (bIsNormalMap)
+    {
+        Texture->CompressionSettings = TC_Normalmap;
+        Texture->SRGB = false;
+    }
+    else
+    {
+        Texture->SRGB = true;
+    }
+    Texture->NeverStream = true;
+    Texture->UpdateResource();
 
     return Texture;
 }

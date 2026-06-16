@@ -4,6 +4,16 @@
 #include "Engine/Texture2D.h"
 #include "BasisTexture.generated.h"
 
+UENUM(BlueprintType)
+enum class EBasisRuntimeStorageMode : uint8
+{
+    /** Keep the installed footprint small; transcode from Basis bytes when loading. */
+    FootprintOptimized UMETA(DisplayName = "Footprint Optimized"),
+
+    /** Keep the download small, then persist native GPU blocks after the first transcode. */
+    DownloadOptimizedNativeCache UMETA(DisplayName = "Download Optimized Native Cache")
+};
+
 /**
  * Asset that stores a Basis Universal compressed texture (.basis or .ktx2 format).
  *
@@ -44,6 +54,10 @@ public:
     /** Runtime GPU texture size in bytes after transcoding */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     int64 TranscodedSize = 0;
+
+    /** Runtime storage policy for this asset. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
+    EBasisRuntimeStorageMode RuntimeStorageMode = EBasisRuntimeStorageMode::FootprintOptimized;
 
     /**
      * Transcode the stored Basis Universal data into a transient GPU-ready UTexture2D.

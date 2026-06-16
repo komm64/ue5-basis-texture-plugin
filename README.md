@@ -94,6 +94,19 @@ A key architectural advantage of the Basis Universal approach is that **one KTX2
 
 In a standard UE5 multi-platform build, the cook process generates separate platform-specific paks — BC5/BC7 for PC, ASTC for iOS/Android — each requiring its own cook pass and storage. With Basis Universal, a single pak could ship to all platforms and transcoding would happen once at load time, simplifying the build pipeline.
 
+### Runtime storage modes
+
+This project targets two deployment policies built on the same cooked Basis payload:
+
+| Mode | Shipping payload | Post-install storage | Runtime cost |
+|---|---|---|---|
+| **Footprint-Optimized** | Basis/KTX2 | Basis/KTX2 only | Transcode on load |
+| **Download-Optimized Native Cache** | Basis/KTX2 | Basis/KTX2 + native BC/ASTC cache generated after first use | No Basis transcode after cache warm-up |
+
+Footprint-Optimized mode keeps both download size and installed size small. It is the core value proposition for storage-constrained devices, demos, and texture-heavy projects where a small installed footprint matters.
+
+Download-Optimized Native Cache mode keeps the installer small, then generates platform-native GPU blocks after install or first launch. Installed size grows toward the native BC/ASTC footprint, but subsequent loads skip Basis transcoding and behave closer to ordinary native textures.
+
 ---
 
 ## What is XUASTC LDR?
@@ -211,6 +224,7 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 - All other textures (albedo) are transcoded to **BC1_RGB** at runtime.
 - **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
 - Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
+- `RuntimeStorageMode` controls whether an imported asset stays in Footprint-Optimized mode or writes native GPU blocks into `Saved/BasisNativeCache` for Download-Optimized Native Cache mode.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
@@ -262,11 +276,14 @@ The current implementation loads only mip level 0 (full resolution). A productio
 
 Mip streaming support is a prerequisite for any production use case.
 
-### 4. Production Runtime Loading
+### 4. Runtime Storage Policies
 
-The current prototype stores the imported Basis Universal bytes in `UBasisTexture` and transcodes from memory at runtime. The file-based loader remains available for standalone demo paths, but imported assets no longer need a temporary file round trip through `Saved/`.
+The current prototype stores imported Basis Universal bytes in `UBasisTexture` and supports two runtime storage policies:
 
-A production implementation still needs async loading, cache management, and direct integration with cooked `UTexture2D` bulk data so runtime loading behaves like native UE texture streaming instead of a transient texture demo path.
+- **Footprint-Optimized**: keep installed assets as Basis/KTX2 and transcode on load.
+- **Download-Optimized Native Cache**: keep the shipping payload small, then persist transcoded native GPU blocks under `Saved/BasisNativeCache` after first use.
+
+A production implementation still needs async cache warm-up, cache invalidation tied to cooked asset versions, platform-specific cache locations, and direct integration with cooked `UTexture2D` bulk data so runtime loading behaves like native UE texture streaming instead of a transient texture demo path.
 
 ---
 
