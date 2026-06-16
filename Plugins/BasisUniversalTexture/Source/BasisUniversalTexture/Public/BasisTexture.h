@@ -40,6 +40,10 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     int32 Height = 0;
 
+    /** Number of mip levels available to the runtime path */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
+    int32 MipLevels = 0;
+
     /** Source codec/container: "ETC1S", "UASTC", "XUASTC", etc. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     FString SourceFormat;
@@ -75,6 +79,13 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal")
     UTexture2D* Transcode();
+
+    /**
+     * Validate asset metadata and runtime-cache readiness before packaging or release.
+     * Returns true when there are no blocking errors. Warnings still need production review.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Validation")
+    bool ValidateRuntimeConfiguration(TArray<FString>& OutErrors, TArray<FString>& OutWarnings) const;
 
     /**
      * Generate or refresh this asset's native GPU block cache.

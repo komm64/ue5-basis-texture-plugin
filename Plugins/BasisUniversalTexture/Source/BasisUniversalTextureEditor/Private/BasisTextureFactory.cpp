@@ -32,7 +32,7 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
     Asset->BasisData.SetNumUninitialized(DataSize);
     FMemory::Memcpy(Asset->BasisData.GetData(), Buffer, DataSize);
     Asset->CompressedSize = DataSize;
-    Asset->BasisMetadataVersion = 1;
+    Asset->BasisMetadataVersion = 2;
     Asset->TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(InName.ToString());
 
     // Read metadata through the same in-memory path used at runtime.
@@ -48,6 +48,7 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
 
         Asset->Width            = Info.Width;
         Asset->Height           = Info.Height;
+        Asset->MipLevels        = Info.MipLevels;
         Asset->SourceFormat     = Info.SourceFormat;
         Asset->TranscodedFormat = Info.TranscodedFormat;
         Asset->TranscodedSize   = Info.TranscodedSize;

@@ -12,7 +12,7 @@ namespace
 {
     constexpr uint32 NativeCacheMagic = 0x424E5443; // BNTC
     constexpr int32 NativeCacheVersion = 2;
-    constexpr int32 BasisMetadataCurrentVersion = 1;
+    constexpr int32 BasisMetadataCurrentVersion = 2;
 
     FString GetNativeCacheTargetProfile(EBasisTextureSemantic TextureSemantic)
     {
@@ -209,9 +209,65 @@ void UBasisTexture::PostLoad()
 
     if (BasisMetadataVersion < BasisMetadataCurrentVersion)
     {
-        TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(GetName());
+        if (BasisMetadataVersion < 1)
+        {
+            TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(GetName());
+        }
+        if (BasisMetadataVersion < 2 && MipLevels <= 0)
+        {
+            MipLevels = 1;
+        }
         BasisMetadataVersion = BasisMetadataCurrentVersion;
     }
+}
+
+bool UBasisTexture::ValidateRuntimeConfiguration(TArray<FString>& OutErrors, TArray<FString>& OutWarnings) const
+{
+    OutErrors.Reset();
+    OutWarnings.Reset();
+
+    if (BasisData.Num() == 0)
+    {
+        OutErrors.Add(TEXT("BasisData is empty."));
+    }
+    if (Width <= 0 || Height <= 0)
+    {
+        OutErrors.Add(TEXT("Texture dimensions are missing or invalid."));
+    }
+    if (CompressedSize <= 0)
+    {
+        OutErrors.Add(TEXT("CompressedSize is missing or invalid."));
+    }
+    else if (CompressedSize != BasisData.Num())
+    {
+        OutErrors.Add(TEXT("CompressedSize does not match the stored BasisData byte count."));
+    }
+    if (MipLevels <= 0)
+    {
+        OutErrors.Add(TEXT("MipLevels is missing or invalid."));
+    }
+    else if (MipLevels == 1)
+    {
+        OutWarnings.Add(TEXT("Only the base mip is available; UE texture streaming integration is not enabled."));
+    }
+
+    const FString ExpectedFormat = TextureSemantic == EBasisTextureSemantic::NormalMap
+        ? TEXT("BC7_RGBA")
+        : TEXT("BC1_RGB");
+    if (!TranscodedFormat.IsEmpty() && TranscodedFormat != ExpectedFormat)
+    {
+        OutWarnings.Add(FString::Printf(
+            TEXT("Stored TranscodedFormat is '%s' but TextureSemantic currently expects '%s'. Reimport or re-save this asset."),
+            *TranscodedFormat,
+            *ExpectedFormat));
+    }
+
+    if (RuntimeStorageMode == EBasisRuntimeStorageMode::DownloadOptimizedNativeCache && !HasNativeCache())
+    {
+        OutWarnings.Add(TEXT("Download-Optimized Native Cache mode is enabled, but the native cache has not been warmed yet."));
+    }
+
+    return OutErrors.Num() == 0;
 }
 
 UTexture2D* UBasisTexture::Transcode()

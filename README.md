@@ -111,6 +111,8 @@ The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Game
 
 Imported assets also store an editable `TextureSemantic` (`Color` or `Normal Map`). The importer guesses the initial value from common filename suffixes such as `_nor`, `_normal`, and `_nrm`, but runtime transcoding and native cache keys use the stored asset value rather than re-reading the filename. Existing assets created before this metadata existed are migrated on load by applying the same filename guess once.
 
+Before a release build, call `ValidateRuntimeConfiguration()` on Basis assets to report blocking metadata errors and production warnings such as missing native cache warm-up or the current base-mip-only runtime path.
+
 ---
 
 ## What is XUASTC LDR?
@@ -229,6 +231,7 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 - **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
 - Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
 - `TextureSemantic` controls whether an asset is treated as color data or normal-map data. The importer guesses the initial value from the filename, but production assets should verify it explicitly in the asset details panel.
+- `ValidateRuntimeConfiguration()` reports asset metadata errors and release-readiness warnings that can be surfaced in editor tooling or a pre-package validation step.
 - `RuntimeStorageMode` controls whether an imported asset stays in Footprint-Optimized mode or writes native GPU blocks into `Saved/BasisNativeCache` for Download-Optimized Native Cache mode.
 - `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
 - Native cache files include a cache version and target GPU profile, are keyed by source data and `TextureSemantic`, are written through a temporary file, and are discarded/regenerated when invalid or stale.
