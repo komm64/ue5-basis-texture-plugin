@@ -18,8 +18,8 @@ THIRD_PARTY_INCLUDES_END
 // ------------------------------------------------------------------
 // UBasisTextureLoader implementation
 // ------------------------------------------------------------------
-// Normal maps: transcoded to BC7_RGBA.
-// Albedo/other: transcoded to BC1_RGB.
+// Fast desktop profile: color -> BC1, alpha -> BC3, normal -> BC5.
+// Quality desktop profile: color -> BC1, alpha/normal -> BC7.
 // ------------------------------------------------------------------
 
 // KTX2 magic: 0xAB 'K' 'T' 'X' ' ' '2' '0' 0xBB
@@ -55,6 +55,8 @@ namespace
         int32 BlockWidth = 4;
         int32 BlockHeight = 4;
         int32 BytesPerBlock = 8;
+        int32 Channel0 = -1;
+        int32 Channel1 = -1;
     };
 
     EBasisNativeTargetProfile ResolveNativeTargetProfile(EBasisNativeTargetProfile TargetProfile)
@@ -89,11 +91,46 @@ namespace
             return Target;
         }
 
+        if (Target.Profile == EBasisNativeTargetProfile::DesktopBCQuality)
+        {
+            if (TextureSemantic == EBasisTextureSemantic::NormalMap || TextureSemantic == EBasisTextureSemantic::ColorWithAlpha)
+            {
+                Target.TranscoderFormat = basist::transcoder_texture_format::cTFBC7_RGBA;
+                Target.PixelFormat = PF_BC7;
+                Target.FormatName = TEXT("BC7_RGBA");
+                Target.BlockWidth = 4;
+                Target.BlockHeight = 4;
+                Target.BytesPerBlock = 16;
+                return Target;
+            }
+
+            Target.TranscoderFormat = basist::transcoder_texture_format::cTFBC1_RGB;
+            Target.PixelFormat = PF_DXT1;
+            Target.FormatName = TEXT("BC1_RGB");
+            Target.BlockWidth = 4;
+            Target.BlockHeight = 4;
+            Target.BytesPerBlock = 8;
+            return Target;
+        }
+
         if (TextureSemantic == EBasisTextureSemantic::NormalMap)
         {
-            Target.TranscoderFormat = basist::transcoder_texture_format::cTFBC7_RGBA;
-            Target.PixelFormat = PF_BC7;
-            Target.FormatName = TEXT("BC7_RGBA");
+            Target.TranscoderFormat = basist::transcoder_texture_format::cTFBC5_RG;
+            Target.PixelFormat = PF_BC5;
+            Target.FormatName = TEXT("BC5_RG");
+            Target.BlockWidth = 4;
+            Target.BlockHeight = 4;
+            Target.BytesPerBlock = 16;
+            Target.Channel0 = 0;
+            Target.Channel1 = 3;
+            return Target;
+        }
+
+        if (TextureSemantic == EBasisTextureSemantic::ColorWithAlpha)
+        {
+            Target.TranscoderFormat = basist::transcoder_texture_format::cTFBC3_RGBA;
+            Target.PixelFormat = PF_DXT5;
+            Target.FormatName = TEXT("BC3_RGBA");
             Target.BlockWidth = 4;
             Target.BlockHeight = 4;
             Target.BytesPerBlock = 16;
@@ -202,9 +239,41 @@ EBasisTextureSemantic UBasisTextureLoader::GuessTextureSemanticFromName(const FS
         || BaseName.EndsWith(TEXT("_normal"))
         || BaseName.Contains(TEXT("_nrm_"))
         || BaseName.EndsWith(TEXT("_nrm"));
+    const bool bLooksLikeAlpha =
+        BaseName.Contains(TEXT("_alpha_"))
+        || BaseName.EndsWith(TEXT("_alpha"))
+        || BaseName.Contains(TEXT("_opacity_"))
+        || BaseName.EndsWith(TEXT("_opacity"))
+        || BaseName.Contains(TEXT("_rgba_"))
+        || BaseName.EndsWith(TEXT("_rgba"));
+    const bool bLooksLikeData =
+        BaseName.Contains(TEXT("_roughness_"))
+        || BaseName.EndsWith(TEXT("_roughness"))
+        || BaseName.Contains(TEXT("_metallic_"))
+        || BaseName.EndsWith(TEXT("_metallic"))
+        || BaseName.Contains(TEXT("_ambientocclusion_"))
+        || BaseName.EndsWith(TEXT("_ambientocclusion"))
+        || BaseName.Contains(TEXT("_occlusion_"))
+        || BaseName.EndsWith(TEXT("_occlusion"))
+        || BaseName.Contains(TEXT("_ao_"))
+        || BaseName.EndsWith(TEXT("_ao"))
+        || BaseName.Contains(TEXT("_height_"))
+        || BaseName.EndsWith(TEXT("_height"))
+        || BaseName.Contains(TEXT("_orm_"))
+        || BaseName.EndsWith(TEXT("_orm"))
+        || BaseName.Contains(TEXT("_mask_"))
+        || BaseName.EndsWith(TEXT("_mask"));
 
-    return bLooksLikeNormal
-        ? EBasisTextureSemantic::NormalMap
+    if (bLooksLikeNormal)
+    {
+        return EBasisTextureSemantic::NormalMap;
+    }
+    if (bLooksLikeData)
+    {
+        return EBasisTextureSemantic::Data;
+    }
+    return bLooksLikeAlpha
+        ? EBasisTextureSemantic::ColorWithAlpha
         : EBasisTextureSemantic::Color;
 }
 
@@ -334,6 +403,26 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
         OutInfo.MipLevels   = static_cast<int32>(KTrans.get_levels());
         {
             const basist::basis_tex_format Fmt = KTrans.get_basis_tex_format();
+            if (!basist::basis_is_format_supported(Target.TranscoderFormat, Fmt))
+            {
+                UE_LOG(LogTemp, Warning,
+                    TEXT("BasisTextureLoader: KTX2 source format %hs cannot transcode to %s for %s"),
+                    basist::basis_get_tex_format_name(Fmt),
+                    *Target.FormatName,
+                    *SourceName);
+                return false;
+            }
+            if (TextureSemantic == EBasisTextureSemantic::NormalMap
+                && Target.TranscoderFormat == basist::transcoder_texture_format::cTFBC5_RG
+                && KTrans.get_dfd_channel_id0() != basist::KTX2_DF_CHANNEL_UASTC_RG
+                && !KTrans.get_has_alpha())
+            {
+                UE_LOG(LogTemp, Warning,
+                    TEXT("BasisTextureLoader: KTX2 normal maps need XUASTC RG data or alpha-channel Y data for BC5_RG. Encode tangent-space normals with -normal_map -separate_rg_to_color_alpha, use XUASTC RG normals, or use Desktop BC Quality for %s."),
+                    *SourceName);
+                return false;
+            }
+
             const char* FmtName = basist::basis_get_tex_format_name(Fmt);
             OutInfo.SourceFormat = FString::Printf(TEXT("%hs (.ktx2)"), FmtName);
         }
@@ -362,7 +451,12 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
                             0,
                             OutputBlocks,
                             NumBlocks,
-                            Target.TranscoderFormat);
+                            Target.TranscoderFormat,
+                            0,
+                            0,
+                            0,
+                            Target.Channel0,
+                            Target.Channel1);
                     }))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 %s transcode failed: %s mip=%u"),
@@ -385,6 +479,24 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
         if (!Trans.get_file_info(pData, DataSize, FileInfo))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: get_file_info failed"));
+            return false;
+        }
+        if (!basist::basis_is_format_supported(Target.TranscoderFormat, FileInfo.m_tex_format))
+        {
+            UE_LOG(LogTemp, Warning,
+                TEXT("BasisTextureLoader: .basis source format %hs cannot transcode to %s for %s"),
+                basist::basis_get_tex_format_name(FileInfo.m_tex_format),
+                *Target.FormatName,
+                *SourceName);
+            return false;
+        }
+        if (TextureSemantic == EBasisTextureSemantic::NormalMap
+            && Target.TranscoderFormat == basist::transcoder_texture_format::cTFBC5_RG
+            && !FileInfo.m_has_alpha_slices)
+        {
+            UE_LOG(LogTemp, Warning,
+                TEXT("BasisTextureLoader: .basis normal maps need alpha-slice Y data for BC5_RG. Use KTX2/XUASTC RG normals or Desktop BC Quality for %s."),
+                *SourceName);
             return false;
         }
         if (!Trans.start_transcoding(pData, DataSize))
@@ -533,6 +645,7 @@ UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
     }
 
     const bool bIsNormalMap = TextureSemantic == EBasisTextureSemantic::NormalMap;
+    const bool bIsLinearData = TextureSemantic == EBasisTextureSemantic::Data;
 
     UTexture2D* Texture = UTexture2D::CreateTransient(Info.Width, Info.Height, Target.PixelFormat);
     if (!Texture)
@@ -541,10 +654,12 @@ UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
         return nullptr;
     }
 
-    Texture->GetPlatformData()->Mips.Empty();
+    FTexturePlatformData* PlatformData = Texture->GetPlatformData();
+    PlatformData->Mips.Empty();
     for (const FBasisNativeMipInfo& MipInfo : Mips)
     {
-        FTexture2DMipMap* Mip = new(Texture->GetPlatformData()->Mips) FTexture2DMipMap();
+        FTexture2DMipMap* Mip = new FTexture2DMipMap();
+        PlatformData->Mips.Add(Mip);
         Mip->SizeX = MipInfo.Width;
         Mip->SizeY = MipInfo.Height;
 
@@ -557,6 +672,10 @@ UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
     if (bIsNormalMap)
     {
         Texture->CompressionSettings = TC_Normalmap;
+        Texture->SRGB = false;
+    }
+    else if (bIsLinearData)
+    {
         Texture->SRGB = false;
     }
     else

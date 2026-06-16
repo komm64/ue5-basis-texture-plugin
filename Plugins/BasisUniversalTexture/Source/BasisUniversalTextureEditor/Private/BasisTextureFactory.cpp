@@ -1,6 +1,7 @@
 #include "BasisTextureFactory.h"
 #include "BasisTexture.h"
 #include "BasisTextureLoader.h"
+#include "Misc/Crc.h"
 #include "Misc/Paths.h"
 
 UBasisTextureFactory::UBasisTextureFactory()
@@ -27,12 +28,13 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
 {
     UBasisTexture* Asset = NewObject<UBasisTexture>(InParent, InName, Flags);
 
-    // Store the raw Basis Universal bytes
+    // Imported assets start with embedded source bytes; release commandlets can externalize them.
     const int64 DataSize = BufferEnd - Buffer;
     Asset->BasisData.SetNumUninitialized(DataSize);
     FMemory::Memcpy(Asset->BasisData.GetData(), Buffer, DataSize);
     Asset->CompressedSize = DataSize;
-    Asset->BasisMetadataVersion = 3;
+    Asset->SourcePayloadCrc = static_cast<int64>(FCrc::MemCrc32(Asset->BasisData.GetData(), Asset->BasisData.Num()));
+    Asset->BasisMetadataVersion = 6;
     Asset->TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(InName.ToString());
     Asset->NativeTargetProfile = EBasisNativeTargetProfile::DefaultForCurrentPlatform;
 
@@ -55,11 +57,25 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
         Asset->TranscodedSize   = Info.TranscodedSize;
     }
 
+    const TCHAR* SemanticName = TEXT("Color");
+    if (Asset->TextureSemantic == EBasisTextureSemantic::NormalMap)
+    {
+        SemanticName = TEXT("NormalMap");
+    }
+    else if (Asset->TextureSemantic == EBasisTextureSemantic::ColorWithAlpha)
+    {
+        SemanticName = TEXT("ColorWithAlpha");
+    }
+    else if (Asset->TextureSemantic == EBasisTextureSemantic::Data)
+    {
+        SemanticName = TEXT("Data");
+    }
+
     UE_LOG(LogTemp, Log,
         TEXT("BasisTextureFactory: imported %s [%dx%d] %s -> %s | semantic=%s | %lld bytes (%.1f KB) | gpu %.1f KB | ratio %.1fx"),
         *InName.ToString(), Asset->Width, Asset->Height, *Asset->SourceFormat,
         *Asset->TranscodedFormat,
-        Asset->TextureSemantic == EBasisTextureSemantic::NormalMap ? TEXT("NormalMap") : TEXT("Color"),
+        SemanticName,
         Asset->CompressedSize, Asset->CompressedSize / 1024.f,
         Asset->TranscodedSize / 1024.f, Asset->GetCompressionRatio());
 

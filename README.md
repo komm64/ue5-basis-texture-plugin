@@ -75,7 +75,7 @@ The following screenshots were taken at the same sun angle (Pitch −35°, Yaw 6
 
 ### Mobile (ASTC devices)
 
-On ASTC-capable devices, XUASTC LDR 8×8 decompresses directly to native ASTC 8×8 blocks with nearly zero transcoding overhead (~33 ms for supercompression removal only, measured on PC).
+On ASTC-capable devices, XUASTC LDR 8×8 transcodes directly to native ASTC 8×8 blocks, avoiding the much heavier BC7 path. The current PC measurement projects to roughly ~72 ms per 2048×2048 texture for CPU transcode only.
 
 > **Note**: This demo targets Win64 only. A proper mobile disk size comparison requires a measured mobile cook with Oodle compression as baseline, which is not included in this prototype. Mobile support is part of the [Roadmap](#roadmap).
 
@@ -83,35 +83,50 @@ On ASTC-capable devices, XUASTC LDR 8×8 decompresses directly to native ASTC 8�
 
 A key architectural advantage of the Basis Universal approach is that **one KTX2 file can serve every target platform**. The Basis Universal transcoder supports transcoding to any GPU-native format at runtime:
 
-| Platform | Transcodes to | Cost (measured on PC) |
+| Platform / profile | Transcodes to | Cost (measured on PC) |
 |---|---|---|
-| PC / Console (DX12/Vulkan) | BC7_RGBA (normal) | ~397 ms / 2048×2048 |
-| PC / Console (DX12/Vulkan) | BC1 (albedo) | ~20 ms / 2048×2048 |
-| Mobile (ASTC) | ASTC 8×8 | ~33 ms / 2048×2048 |
+| PC / Console fast runtime | BC1_RGB (color) | ~23 ms / 2048×2048 projected |
+| PC / Console fast runtime | BC3_RGBA (color + alpha) | ~22 ms / 2048×2048 projected |
+| PC / Console fast runtime | BC5_RG (XUASTC RRRG normal) | ~150 ms / 2048×2048 projected |
+| PC / Console quality/native-cache | BC7_RGBA (normal or alpha) | ~254 ms median, ~397 ms worst-case class / 2048×2048 |
+| Mobile fast runtime (ASTC source) | ASTC 8×8 | ~72 ms / 2048×2048 projected |
 | Mobile (ETC2 fallback) | ETC2 | supported by transcoder |
 
 > **Note**: This demo targets Win64 only. The mobile transcoding path is supported by the underlying `basist::ktx2_transcoder` but has not been tested on device in this prototype. Full multi-platform support is part of the [Roadmap](#roadmap).
+
+Runtime transcode is not intended for bulk startup conversion of hundreds or thousands of textures. Use native cache warm-up, throttled async jobs, or cook/install-time native conversion for large libraries.
 
 In a standard UE5 multi-platform build, the cook process generates separate platform-specific paks — BC5/BC7 for PC, ASTC for iOS/Android — each requiring its own cook pass and storage. With Basis Universal, a single pak could ship to all platforms and transcoding would happen once at load time, simplifying the build pipeline.
 
 ### Runtime storage modes
 
-This project targets two deployment policies built on the same cooked Basis payload:
+This project targets three deployment policies. The production-oriented path is **Install-Time Native Only**: ship a compact external Basis/KTX2 payload, generate native GPU blocks during install/finalization or first launch, then delete the source payload so runtime loads only BC/ASTC data.
 
 | Mode | Shipping payload | Post-install storage | Runtime cost |
 |---|---|---|---|
-| **Footprint-Optimized** | Basis/KTX2 | Basis/KTX2 only | Transcode on load |
-| **Download-Optimized Native Cache** | Basis/KTX2 | Basis/KTX2 + native BC/ASTC cache generated after first use | No Basis transcode after cache warm-up |
+| **Footprint-Optimized** | Embedded or external Basis/KTX2 | Basis/KTX2 only | Transcode on load |
+| **Download-Optimized Native Cache** | Embedded or external Basis/KTX2 | Basis/KTX2 + native BC/ASTC cache | No Basis transcode after cache warm-up; cache can regenerate |
+| **Install-Time Native Only** | External Basis/KTX2 install payload | Native BC/ASTC cache only after finalization | No Basis transcode; cache miss is a release error |
 
 Footprint-Optimized mode keeps both download size and installed size small. It is the core value proposition for storage-constrained devices, demos, and texture-heavy projects where a small installed footprint matters.
 
-Download-Optimized Native Cache mode keeps the installer small, then generates platform-native GPU blocks after install or first launch. Installed size grows toward the native BC/ASTC footprint, but subsequent loads skip Basis transcoding and behave closer to ordinary native textures.
+Download-Optimized Native Cache mode keeps the installer small, then generates platform-native GPU blocks after install or first launch. Installed size grows because the source Basis/KTX2 payload is retained for cache recovery, but subsequent loads skip Basis transcoding and behave closer to ordinary native textures.
 
-The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, call `WarmNativeCacheForTextures()` during a first-launch preparation step, call `WarmNativeCacheForTexturesBudgeted()` repeatedly from a loading screen, or call `WarmNativeCacheForTexturesAsync()` to populate `Saved/BasisNativeCache` on a worker thread.
+Install-Time Native Only mode is for large projects that want installer/download savings without runtime transcode spikes. The asset stores `ExternalBasisPayloadPath` plus a stable `SourcePayloadCrc`, warms `Saved/BasisNativeCache`, and then `DiscardExternalSourcePayload()` or the validation commandlet can remove the external payload. At runtime this mode never regenerates cache; missing or stale native blocks fail loudly.
 
-Imported assets also store an editable `TextureSemantic` (`Color` or `Normal Map`). The importer guesses the initial value from common filename suffixes such as `_nor`, `_normal`, and `_nrm`, but runtime transcoding and native cache keys use the stored asset value rather than re-reading the filename. Existing assets created before this metadata existed are migrated on load by applying the same filename guess once.
+The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, call `WarmNativeCacheForTextures()` during a first-launch preparation step, call `WarmNativeCacheForTexturesBudgeted()` repeatedly from a loading screen, or call `WarmNativeCacheForTexturesAsyncThrottled()` to populate `Saved/BasisNativeCache` with a bounded number of worker-thread transcodes.
 
-`NativeTargetProfile` controls the native output family. `Default For Current Platform` resolves to Desktop BC on desktop builds and ASTC 8x8 on iOS/Android builds. It can also be pinned explicitly to `Desktop BC` or `Mobile ASTC 8x8`.
+Imported assets also store an editable `TextureSemantic` (`Color`, `Color With Alpha`, `Normal Map`, or `Data / Linear`). The importer guesses the initial value from common filename suffixes such as `_nor`, `_normal`, `_nrm`, `_roughness`, `_metallic`, `_ao`, `_height`, `_mask`, `_alpha`, `_opacity`, and `_rgba`, but runtime transcoding and native cache keys use the stored asset value rather than re-reading the filename. Existing assets created before this metadata existed are migrated on load by applying the same filename guess once.
+
+`NativeTargetProfile` controls the native output family. `Default For Current Platform` resolves to Desktop BC Fast Runtime on desktop builds and ASTC 8x8 on iOS/Android builds. It can also be pinned explicitly:
+
+| Profile | Color | Data / Linear | Color With Alpha | Normal Map | Intent |
+|---|---|---|---|---|---|
+| Desktop BC Fast Runtime | BC1 | BC1, linear sampling | BC3 | BC5 | lower runtime CPU spikes |
+| Desktop BC Quality | BC1 | BC1, linear sampling | BC7 | BC7 | higher quality, best with native cache |
+| Mobile ASTC 8x8 | ASTC 8x8 | ASTC 8x8, linear sampling | ASTC 8x8 | ASTC 8x8 | ASTC-capable devices |
+
+The async cache API includes `WarmNativeCacheForTexturesAsyncThrottled()` so large projects can cap concurrent transcodes. Start with 1-2 jobs during gameplay/loading and use higher values only during install-finalization or first-launch preparation screens.
 
 Before a release build, call `ValidateRuntimeConfiguration()` on individual Basis assets, `ValidateRuntimeConfigurationsForTextures()` for a batch, or run the `BasisTextureValidation` commandlet to report blocking metadata errors and production warnings such as missing native cache warm-up or source assets that only contain a base mip.
 
@@ -124,7 +139,7 @@ XUASTC LDR is a supercompressed ASTC format introduced in **Basis Universal v2.1
 Key properties:
 - **Explicitly supports normal maps** (documented in official Basis Universal spec)
 - **KTX2 container** with `KTX2_SS_XUASTC_LDR` supercompression scheme
-- **Transcodes to any GPU format** at runtime: BC5, BC7, ASTC, ETC2, etc.
+- **Transcodes to many GPU formats** at runtime: BC5, BC7, ASTC, ETC2, etc. Source/target compatibility still matters; for example ETC1S does not transcode directly to ASTC 8x8.
 - **`BASISD_SUPPORT_XUASTC=1` is the default** in the Basis Universal transcoder
 
 This demo uses **XUASTC LDR 8×8 (2 bpp)** for normal maps and **ETC1S** for albedo textures.
@@ -142,9 +157,13 @@ XUASTC LDR 8×8 at 27.2 dB PSNR was visually acceptable in this demo scene under
 
 | Target format | Time |
 |---|---|
-| BC7_RGBA (normal maps) | ~397 ms |
-| BC1_RGB (albedo) | ~20 ms |
-| ASTC 8×8 (mobile, PC measurement) | ~33 ms |
+| BC1_RGB (ETC1S color) | ~23 ms projected |
+| BC3_RGBA (ETC1S color + alpha) | ~22 ms projected |
+| BC5_RG (XUASTC RRRG normal, R/A channel mapping) | ~150 ms projected |
+| BC7_RGBA (XUASTC normal, quality profile) | ~254 ms median, ~397 ms worst-case class |
+| ASTC 8×8 (XUASTC 8×8 source, PC measurement) | ~72 ms projected |
+
+These numbers are CPU transcode only, measured on an i7-9700 using the plugin's vendored Basis Universal transcoder in Release mode, then projected from 1920×1080 + full mips to 2048×2048 by pixel count. They do not include file I/O, transient `UTexture2D` creation, RHI upload, or render-thread synchronization.
 
 ---
 
@@ -159,7 +178,7 @@ BasisDemo.uproject
 │       └── Source/
 │           ├── BasisUniversalTexture/
 │           │   ├── Private/
-│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC7/BC1
+│           │   │   ├── BasisTextureLoader.cpp   # Transcode to BC1/BC3/BC5/BC7/ASTC
 │           │   │   ├── BasisTexture.cpp
 │           │   │   └── ThirdParty/
 │           │   │       ├── BasisUniversal/      # basis_universal v2.10 transcoder
@@ -196,7 +215,13 @@ Encodes all `*nor_dx*.png` files in `source_textures/` to KTX2 using:
 basisu <input>.png -ldr_8x8i -quality 128 -effort 6 -output_file <output>.ktx2
 ```
 
-> **Note**: The `-normal_map` flag is intentionally omitted. With `-normal_map`, basisu stores the Y component in the Alpha channel for better UASTC compression. However, this causes incorrect channel mapping when transcoding to BC5_RG at runtime (the G channel receives garbage data). Omitting `-normal_map` keeps XY in the standard RG channels.
+For the fast desktop BC5 path, tangent-space normal maps must store X in red and Y in alpha before transcoding to `BC5_RG`:
+
+```
+basisu <input>.png -ldr_8x8i -normal_map -separate_rg_to_color_alpha -mipmap -output_file <output>.ktx2
+```
+
+`-separate_rg_to_color_alpha` is equivalent to `-swizzle rrrg`: red is replicated into RGB and green is stored in alpha. This matches the Basis Universal BC5 convention, where the transcoder pulls BC5's second channel from alpha. Plain RGB normal KTX2 files are rejected for the Desktop BC Fast Runtime profile because their Y channel would be lost during BC5 transcode. Use `Desktop BC Quality` if the asset should remain ordinary RGB/RGBA and output BC7 instead.
 
 ### 2. Deploy KTX2 files
 
@@ -228,6 +253,19 @@ Optional validation plus native cache warm-up:
 UnrealEditor-Cmd.exe BasisDemo.uproject -run=BasisTextureValidation -Path=/Game -WarmCache -FailOnWarnings
 ```
 
+Install-time native-only preparation for a release candidate:
+
+```powershell
+UnrealEditor-Cmd.exe BasisDemo.uproject -run=BasisTextureValidation -Path=/Game `
+  -ExternalizePayloads=BasisInstallPayloads `
+  -SetInstallTimeNativeOnly `
+  -WarmCache `
+  -DiscardExternalPayloads `
+  -FailOnWarnings
+```
+
+This writes embedded `.basis` / `.ktx2` bytes to external install payload files, clears the embedded `BasisData` from the asset package, saves modified packages, warms `Saved/BasisNativeCache`, deletes the external payloads after the cache exists, and finally validates the native-only runtime state. In a shipping installer, the same sequence can be split: ship the external payloads in the installer, run warm-up during install finalization or first launch, then discard them.
+
 ```powershell
 # Basis build (ETC1S albedo + XUASTC 8x8 normals)
 .\package_basis_nobuild.ps1
@@ -240,16 +278,20 @@ UnrealEditor-Cmd.exe BasisDemo.uproject -run=BasisTextureValidation -Path=/Game 
 
 ## Plugin Implementation Notes
 
-- `TextureSemantic = Normal Map` assets are transcoded to **BC7_RGBA** under the Desktop BC profile.
-- `TextureSemantic = Color` assets are transcoded to **BC1_RGB** under the Desktop BC profile.
-- `NativeTargetProfile = Mobile ASTC 8x8` transcodes both color and normal-map assets to **ASTC_8x8_RGBA** blocks, with sRGB controlled by `TextureSemantic`.
-- **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
-- Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode all available mip levels directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
-- `TextureSemantic` controls whether an asset is treated as color data or normal-map data. The importer guesses the initial value from the filename, but production assets should verify it explicitly in the asset details panel.
+- `TextureSemantic = Color` assets transcode to **BC1_RGB** under Desktop BC Fast Runtime and are sampled as sRGB.
+- `TextureSemantic = Data / Linear` assets transcode to **BC1_RGB** under Desktop BC Fast Runtime and are sampled linearly. Use this for roughness, metallic, ambient occlusion, height, and packed ORM/mask textures.
+- `TextureSemantic = Color With Alpha` assets transcode to **BC3_RGBA** under Desktop BC Fast Runtime and **BC7_RGBA** under Desktop BC Quality.
+- `TextureSemantic = Normal Map` assets transcode to **BC5_RG** under Desktop BC Fast Runtime and **BC7_RGBA** under Desktop BC Quality.
+- The KTX2 normal-map BC5 path accepts XUASTC `RG` data or alpha-channel Y data (`RRRG` from `basisu -normal_map -separate_rg_to_color_alpha`). Plain RGB normal KTX2 files are rejected for Desktop BC Fast Runtime because BC5 would otherwise lose Y. Legacy `.basis` normal maps need alpha-slice Y data for BC5 or should use Desktop BC Quality.
+- `NativeTargetProfile = Mobile ASTC 8x8` transcodes compatible XUASTC/ASTC sources to **ASTC_8x8_RGBA** blocks, with sRGB controlled by `TextureSemantic`. ETC1S sources are rejected for ASTC 8x8 because the Basis transcoder does not support that conversion.
+- Imported `UBasisTexture` assets store raw `.basis` / `.ktx2` bytes by default. Release builds can externalize those bytes into removable install payload files through the `BasisTextureValidation` commandlet.
+- `ABasisTextureMaterialBinder` can be placed in a map to replace material texture parameters at runtime. This lets production builds keep tiny placeholder `Texture2D` references for cooking while the shipped visual textures live as `UBasisTexture` assets and are transcoded when the level starts.
+- `TextureSemantic` controls whether an asset is treated as opaque color, linear data, color with alpha, or normal-map data. The importer guesses the initial value from the filename, but production assets should verify it explicitly in the asset details panel.
 - `ValidateRuntimeConfiguration()`, `ValidateRuntimeConfigurationsForTextures()`, and the `BasisTextureValidation` commandlet report asset metadata errors and release-readiness warnings that can be surfaced in editor tooling or a pre-package validation step.
-- `RuntimeStorageMode` controls whether an imported asset stays in Footprint-Optimized mode or writes native GPU blocks into `Saved/BasisNativeCache` for Download-Optimized Native Cache mode.
+- `RuntimeStorageMode` controls whether an asset transcodes from source on load, retains source bytes plus a regenerable native cache, or runs as Install-Time Native Only with no runtime Basis transcode fallback.
+- `ExternalBasisPayloadPath` and `SourcePayloadCrc` let the cache key remain stable after external source payloads are deleted.
 - `NativeCacheInvalidationKey` can be set by the project or build pipeline to force cache invalidation across patches or compatibility-breaking changes.
-- `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `WarmNativeCacheForTexturesAsync()`, `WarmNativeCacheForTexturesAsyncWithProgress()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
+- `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `WarmNativeCacheForTexturesAsync()`, `WarmNativeCacheForTexturesAsyncWithProgress()`, `WarmNativeCacheForTexturesAsyncThrottled()`, `ClearNativeCache()`, `HasNativeCache()`, `HasSourcePayload()`, `DiscardExternalSourcePayload()`, and batch warm/clear/discard helpers provide the workflow for first-launch cache population and cache management.
 - Native cache files include a cache version, target GPU profile, and per-mip layout, are keyed by source data, `TextureSemantic`, `NativeTargetProfile`, and `NativeCacheInvalidationKey`, are written through a temporary file, and are discarded/regenerated when invalid or stale.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
@@ -262,7 +304,7 @@ This demo was developed to evaluate Basis Universal as a practical texture compr
 
 1. **Accurate comparison** — enabling Oodle Texture RDO on the Standard build ensures a fair baseline
 2. **XUASTC LDR discovery** — demonstrating the first known UE5 integration of the XUASTC LDR format
-3. **Mobile-first potential** — XUASTC 8×8 → ASTC 8×8 transcoding is nearly free on mobile hardware (~33 ms measured on PC), adding domain-specific supercompression on top of standard ASTC blocks
+3. **Mobile-first potential** — XUASTC 8×8 → ASTC 8×8 transcoding is much cheaper than XUASTC → BC7 on CPU, adding domain-specific supercompression on top of standard ASTC blocks
 
 ---
 
@@ -304,12 +346,13 @@ Cooked texture streaming behavior must be validated in the target UE version and
 
 ### 4. Runtime Storage Policies
 
-The current prototype stores imported Basis Universal bytes in `UBasisTexture` and supports two runtime storage policies:
+The current prototype supports three runtime storage policies:
 
 - **Footprint-Optimized**: keep installed assets as Basis/KTX2 and transcode on load.
-- **Download-Optimized Native Cache**: keep the shipping payload small, then persist transcoded native GPU blocks under `Saved/BasisNativeCache` after first use.
+- **Download-Optimized Native Cache**: keep the source payload, then persist transcoded native GPU blocks under `Saved/BasisNativeCache` after first use.
+- **Install-Time Native Only**: externalize the source payload, warm platform-native GPU blocks, delete the external payload, and make runtime cache misses blocking errors.
 
-The runtime storage implementation includes synchronous, budgeted, and worker-thread cache warm-up helpers, per-mip native cache layout, explicit native target profiles, and project-driven cache invalidation through `NativeCacheInvalidationKey`. Release verification should cover packaged-build cache lifecycle, platform-specific cache policy, and patch/update invalidation behavior.
+The runtime storage implementation includes synchronous, budgeted, and throttled worker-thread cache warm-up helpers, per-mip native cache layout, explicit native target profiles, external install payloads, removable source payloads, and project-driven cache invalidation through `NativeCacheInvalidationKey`. Release verification should cover packaged-build cache lifecycle, platform-specific cache policy, patch/update invalidation behavior, and large-library warm-up scheduling.
 
 ---
 

@@ -9,10 +9,13 @@ UENUM(BlueprintType)
 enum class EBasisRuntimeStorageMode : uint8
 {
     /** Keep the installed footprint small; transcode from Basis bytes when loading. */
-    FootprintOptimized UMETA(DisplayName = "Footprint Optimized"),
+    FootprintOptimized = 0 UMETA(DisplayName = "Footprint Optimized"),
 
     /** Keep the download small, then persist native GPU blocks after the first transcode. */
-    DownloadOptimizedNativeCache UMETA(DisplayName = "Download Optimized Native Cache")
+    DownloadOptimizedNativeCache = 1 UMETA(DisplayName = "Download Optimized Native Cache"),
+
+    /** Runtime only loads prebuilt native blocks. Basis payload may be distributed separately and deleted after install-time conversion. */
+    InstallTimeNativeOnly = 2 UMETA(DisplayName = "Install-Time Native Only")
 };
 
 DECLARE_DYNAMIC_DELEGATE_ThreeParams(
@@ -31,9 +34,10 @@ DECLARE_DYNAMIC_DELEGATE_FourParams(
 /**
  * Asset that stores a Basis Universal compressed texture (.basis or .ktx2 format).
  *
- * At cook time: the raw Basis Universal bytes are packed into the .uasset,
- * much smaller than a cooked GPU-native texture.
- * At runtime: call Transcode() to decode into a GPU-ready UTexture2D.
+ * Imported assets contain embedded source bytes by default, but release pipelines
+ * can externalize that payload and run from prebuilt native GPU blocks.
+ * At runtime: call Transcode() to load or generate a GPU-ready UTexture2D according
+ * to RuntimeStorageMode.
  */
 UCLASS(BlueprintType)
 class BASISUNIVERSALTEXTURE_API UBasisTexture : public UObject
@@ -44,6 +48,14 @@ public:
     /** Raw Basis Universal file bytes, stored directly in the .uasset */
     UPROPERTY()
     TArray<uint8> BasisData;
+
+    /** Optional external Basis/KTX2 payload path, relative to ProjectDir or absolute. Enables removable install-time payloads. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime|Install Payload")
+    FString ExternalBasisPayloadPath;
+
+    /** Stable CRC of the source Basis/KTX2 payload, used to find native cache after the source payload is deleted. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Runtime|Install Payload")
+    int64 SourcePayloadCrc = 0;
 
     /** Width of the base mip */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
@@ -65,7 +77,7 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     FString TranscodedFormat;
 
-    /** Compressed size in bytes (= asset size on disk) */
+    /** Compressed source payload size in bytes. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     int64 CompressedSize = 0;
 
@@ -133,6 +145,14 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal|Native Cache")
     bool HasNativeCache() const;
 
+    /** True when embedded bytes or an external Basis/KTX2 payload are available. */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal|Native Cache")
+    bool HasSourcePayload() const;
+
+    /** Delete the external Basis/KTX2 payload after a native cache has been generated. Embedded uasset bytes are not modified at runtime. */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    bool DiscardExternalSourcePayload();
+
     /** Size of this asset's native GPU block cache on disk, or 0 when absent. */
     UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal|Native Cache")
     int64 GetNativeCacheSizeBytes() const;
@@ -163,6 +183,17 @@ public:
         FBasisNativeCacheWarmupComplete OnComplete);
 
     /**
+     * Warm native caches on worker threads with an explicit concurrency limit.
+     * Use a low value during gameplay to avoid CPU spikes, and a higher value during install/finalization screens.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void WarmNativeCacheForTexturesAsyncThrottled(
+        const TArray<UBasisTexture*>& Textures,
+        int32 MaxConcurrentTranscodes,
+        FBasisNativeCacheWarmupProgress OnProgress,
+        FBasisNativeCacheWarmupComplete OnComplete);
+
+    /**
      * Warm part of a texture list. Call repeatedly from a loading screen until it returns true.
      * MaxTextures is a per-call budget; values <= 0 perform no work.
      * @return True when all entries have been processed.
@@ -182,6 +213,13 @@ public:
     static void ClearNativeCacheForTextures(
         const TArray<UBasisTexture*>& Textures,
         int32& OutCleared,
+        int32& OutFailed);
+
+    /** Delete external Basis/KTX2 payloads for a batch after native caches are present. */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void DiscardExternalSourcePayloadsForTextures(
+        const TArray<UBasisTexture*>& Textures,
+        int32& OutDiscarded,
         int32& OutFailed);
 
     /** Compression ratio: TranscodedSize / CompressedSize */
