@@ -1,9 +1,15 @@
 #include "BasisTextureLoader.h"
 
 #include "Engine/Texture2D.h"
+#include "HAL/CriticalSection.h"
+#include "HAL/FileManager.h"
+#include "HAL/PlatformTime.h"
 #include "RenderUtils.h"
+#include "Misc/CommandLine.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Parse.h"
+#include "Misc/ScopeLock.h"
 #include "RHI.h"
 #include "Templates/Function.h"
 #include "TextureResource.h"
@@ -46,6 +52,65 @@ static int64 EstimateBlockCompressedSize(int32 Width, int32 Height, int32 MipLev
 
 namespace
 {
+    bool IsBasisTimingCsvEnabled()
+    {
+        return FParse::Param(FCommandLine::Get(), TEXT("BasisTiming"));
+    }
+
+    FString CsvEscape(const FString& Value)
+    {
+        FString Escaped = Value;
+        Escaped.ReplaceInline(TEXT("\""), TEXT("\"\""));
+        return FString::Printf(TEXT("\"%s\""), *Escaped);
+    }
+
+    void AppendBasisTimingCsv(
+        const FString& SourceName,
+        const FBasisTranscodeInfo& Info,
+        double SetupMilliseconds,
+        double TranscodeMilliseconds,
+        double TotalMilliseconds)
+    {
+        if (!IsBasisTimingCsvEnabled())
+        {
+            return;
+        }
+
+        static FCriticalSection TimingCsvMutex;
+        FScopeLock Lock(&TimingCsvMutex);
+
+        const FString TimingDir = FPaths::ProjectSavedDir() / TEXT("BasisTimings");
+        const FString TimingPath = TimingDir / TEXT("basis_transcode_timings.csv");
+        IFileManager::Get().MakeDirectory(*TimingDir, true);
+
+        if (!FPaths::FileExists(TimingPath))
+        {
+            const FString Header =
+                TEXT("source,width,height,mips,source_format,target_format,source_bytes,native_bytes,setup_ms,transcode_ms,total_ms\n");
+            FFileHelper::SaveStringToFile(Header, *TimingPath);
+        }
+
+        const FString Line = FString::Printf(
+            TEXT("%s,%d,%d,%d,%s,%s,%lld,%lld,%.3f,%.3f,%.3f\n"),
+            *CsvEscape(FPaths::GetCleanFilename(SourceName)),
+            Info.Width,
+            Info.Height,
+            Info.MipLevels,
+            *CsvEscape(Info.SourceFormat),
+            *CsvEscape(Info.TranscodedFormat),
+            Info.CompressedFileSize,
+            Info.TranscodedSize,
+            SetupMilliseconds,
+            TranscodeMilliseconds,
+            TotalMilliseconds);
+        FFileHelper::SaveStringToFile(
+            Line,
+            *TimingPath,
+            FFileHelper::EEncodingOptions::AutoDetect,
+            &IFileManager::Get(),
+            FILEWRITE_Append);
+    }
+
     struct FResolvedNativeTarget
     {
         EBasisNativeTargetProfile Profile = EBasisNativeTargetProfile::DesktopBC;
@@ -359,6 +424,9 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
 {
     OutInfo = FBasisTranscodeInfo();
     OutNativeBlocks.Reset();
+    const double TotalStartSeconds = FPlatformTime::Seconds();
+    double SetupSeconds = 0.0;
+    double TranscodeSeconds = 0.0;
 
     if (SourceData.Num() == 0)
     {
@@ -378,6 +446,7 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
     if (IsKTX2(pData, DataSize))
     {
         // --- KTX2 path (supports UASTC+Zstd, XUASTC LDR, ETC1S) ---
+        const double SetupStartSeconds = FPlatformTime::Seconds();
         basist::ktx2_transcoder KTrans;
         if (!KTrans.init(pData, DataSize))
         {
@@ -394,6 +463,7 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: texture arrays and cubemaps are not supported yet: %s"), *SourceName);
             return false;
         }
+        SetupSeconds += FPlatformTime::Seconds() - SetupStartSeconds;
 
         Width  = KTrans.get_width();
         Height = KTrans.get_height();
@@ -443,9 +513,10 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
                     static_cast<int32>(LevelInfo.m_orig_width),
                     static_cast<int32>(LevelInfo.m_orig_height),
                     Target,
-                    [&KTrans, LevelIndex, &Target](void* OutputBlocks, uint32 NumBlocks)
+                    [&KTrans, LevelIndex, &Target, &TranscodeSeconds](void* OutputBlocks, uint32 NumBlocks)
                     {
-                        return KTrans.transcode_image_level(
+                        const double MipStartSeconds = FPlatformTime::Seconds();
+                        const bool bTranscoded = KTrans.transcode_image_level(
                             LevelIndex,
                             0,
                             0,
@@ -457,6 +528,8 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
                             0,
                             Target.Channel0,
                             Target.Channel1);
+                        TranscodeSeconds += FPlatformTime::Seconds() - MipStartSeconds;
+                        return bTranscoded;
                     }))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 %s transcode failed: %s mip=%u"),
@@ -468,6 +541,7 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
     else
     {
         // --- Legacy .basis path (ETC1S or UASTC without supercompression) ---
+        const double SetupStartSeconds = FPlatformTime::Seconds();
         basist::basisu_transcoder Trans;
         if (!Trans.validate_header(pData, DataSize))
         {
@@ -504,6 +578,7 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: start_transcoding failed"));
             return false;
         }
+        SetupSeconds += FPlatformTime::Seconds() - SetupStartSeconds;
 
         basist::basisu_image_info ImgInfo;
         if (!Trans.get_image_info(pData, DataSize, ImgInfo, 0))
@@ -539,9 +614,10 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
                     static_cast<int32>(LevelInfo.m_orig_width),
                     static_cast<int32>(LevelInfo.m_orig_height),
                     Target,
-                    [&Trans, pData, DataSize, LevelIndex, &Target](void* OutputBlocks, uint32 NumBlocks)
+                    [&Trans, pData, DataSize, LevelIndex, &Target, &TranscodeSeconds](void* OutputBlocks, uint32 NumBlocks)
                     {
-                        return Trans.transcode_image_level(
+                        const double MipStartSeconds = FPlatformTime::Seconds();
+                        const bool bTranscoded = Trans.transcode_image_level(
                             pData,
                             DataSize,
                             0,
@@ -549,6 +625,8 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
                             OutputBlocks,
                             NumBlocks,
                             Target.TranscoderFormat);
+                        TranscodeSeconds += FPlatformTime::Seconds() - MipStartSeconds;
+                        return bTranscoded;
                     }))
             {
                 UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: .basis %s transcode failed: %s mip=%u"),
@@ -563,9 +641,12 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
     OutInfo.TranscodedSize = OutNativeBlocks.Num();
     OutInfo.CompressionRatio = static_cast<float>(OutInfo.TranscodedSize)
                              / static_cast<float>(OutInfo.CompressedFileSize);
+    const double TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+    const double SetupMilliseconds = SetupSeconds * 1000.0;
+    const double TranscodeMilliseconds = TranscodeSeconds * 1000.0;
 
     UE_LOG(LogTemp, Log,
-        TEXT("BasisTextureLoader: loaded %s [%ux%u mips=%d] %s -> %s | disk=%lld bytes | gpu=%lld bytes | ratio=%.1fx"),
+        TEXT("BasisTextureLoader: loaded %s [%ux%u mips=%d] %s -> %s | disk=%lld bytes | gpu=%lld bytes | ratio=%.1fx | setup=%.3f ms | transcode=%.3f ms | total=%.3f ms"),
         *FPaths::GetCleanFilename(SourceName),
         Width, Height,
         OutInfo.MipLevels,
@@ -573,7 +654,17 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
         *OutInfo.TranscodedFormat,
         OutInfo.CompressedFileSize,
         OutInfo.TranscodedSize,
-        OutInfo.CompressionRatio);
+        OutInfo.CompressionRatio,
+        SetupMilliseconds,
+        TranscodeMilliseconds,
+        TotalMilliseconds);
+
+    AppendBasisTimingCsv(
+        SourceName,
+        OutInfo,
+        SetupMilliseconds,
+        TranscodeMilliseconds,
+        TotalMilliseconds);
 
     return true;
 }

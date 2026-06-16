@@ -1,0 +1,14 @@
+# Unreal generated files
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Plugins/*/Binaries/
+Plugins/*/Intermediate/
+
+# Local smoke-test assets
+Content/BasisSmoke/
+Content/BasisVisual/
+
+# Local benchmark scratch data. Individual helper scripts may be force-added.
+.bench/

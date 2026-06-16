@@ -274,6 +274,32 @@ This writes embedded `.basis` / `.ktx2` bytes to external install payload files,
 .\package_standard_timed.ps1
 ```
 
+### Cook-whitelist Binder workflow
+
+When using `ABasisTextureMaterialBinder` for an existing project, do not discover Basis textures by scanning every material asset under a content folder. That can hard-reference converted textures that the original UE cook would never include, inflating the Basis package and invalidating size comparisons.
+
+Use the Standard cook as the source of truth:
+
+1. Package the Standard build first.
+2. Generate a cooked package whitelist from the Standard `.utoc` / `.pak`.
+3. Export and encode only materials and source textures whose packages are present in that whitelist.
+4. Rebuild the Binder from the filtered manifest and prune stale `BasisRuntime` assets before packaging the Basis build.
+5. Verify the final package with a Standard-vs-Basis cook delta report; unmatched Basis-only textures should be zero.
+
+The `.bench` helpers used for the VirtualStudio validation follow this flow:
+
+```powershell
+python .bench\build_cooked_package_whitelist.py --container <Standard.utoc> --project-name <Project> --output <CookWhitelist.json>
+
+$env:BASIS_VS_COOKED_WHITELIST = '<CookWhitelist.json>'
+UnrealEditor-Cmd.exe <StandardProject.uproject> -run=pythonscript -script=.bench\ue_virtualstudio_basis_export.py -unattended -nullrhi
+
+$env:BASIS_VS_PRUNE_UNLISTED = '1'
+UnrealEditor-Cmd.exe <BasisProject.uproject> -run=pythonscript -script=.bench\ue_virtualstudio_basis_import_apply.py -unattended -nullrhi
+
+python .bench\report_basis_cook_delta.py --standard-container <Standard.utoc> --basis-container <Basis.utoc> --encoded-manifest <EncodedManifest.json> --project-name <Project> --fail-on-unmatched
+```
+
 ---
 
 ## Plugin Implementation Notes
@@ -293,6 +319,7 @@ This writes embedded `.basis` / `.ktx2` bytes to external install payload files,
 - `NativeCacheInvalidationKey` can be set by the project or build pipeline to force cache invalidation across patches or compatibility-breaking changes.
 - `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `WarmNativeCacheForTexturesAsync()`, `WarmNativeCacheForTexturesAsyncWithProgress()`, `WarmNativeCacheForTexturesAsyncThrottled()`, `ClearNativeCache()`, `HasNativeCache()`, `HasSourcePayload()`, `DiscardExternalSourcePayload()`, and batch warm/clear/discard helpers provide the workflow for first-launch cache population and cache management.
 - Native cache files include a cache version, target GPU profile, and per-mip layout, are keyed by source data, `TextureSemantic`, `NativeTargetProfile`, and `NativeCacheInvalidationKey`, are written through a temporary file, and are discarded/regenerated when invalid or stale.
+- Passing `-BasisTiming` on the command line writes per-texture runtime transcode timings to `Saved/BasisTimings/basis_transcode_timings.csv`. The CSV separates setup time from the net `transcode_image_level()` time and does not include disk I/O, `UTexture2D` creation, or RHI upload.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
