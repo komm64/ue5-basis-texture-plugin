@@ -15,6 +15,12 @@ enum class EBasisRuntimeStorageMode : uint8
     DownloadOptimizedNativeCache UMETA(DisplayName = "Download Optimized Native Cache")
 };
 
+DECLARE_DYNAMIC_DELEGATE_ThreeParams(
+    FBasisNativeCacheWarmupComplete,
+    int32, Succeeded,
+    int32, Failed,
+    int64, CacheSizeBytes);
+
 /**
  * Asset that stores a Basis Universal compressed texture (.basis or .ktx2 format).
  *
@@ -64,6 +70,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
     EBasisRuntimeStorageMode RuntimeStorageMode = EBasisRuntimeStorageMode::FootprintOptimized;
 
+    /** Native GPU block target used for runtime transcode and native cache generation. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
+    EBasisNativeTargetProfile NativeTargetProfile = EBasisNativeTargetProfile::DefaultForCurrentPlatform;
+
     /** Internal version for import/runtime metadata migrations. */
     UPROPERTY()
     int32 BasisMetadataVersion = 0;
@@ -86,6 +96,16 @@ public:
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal|Validation")
     bool ValidateRuntimeConfiguration(TArray<FString>& OutErrors, TArray<FString>& OutWarnings) const;
+
+    /**
+     * Validate a batch of Basis assets before packaging or release.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Validation")
+    static bool ValidateRuntimeConfigurationsForTextures(
+        const TArray<UBasisTexture*>& Textures,
+        int32& OutValid,
+        int32& OutInvalid,
+        TArray<FString>& OutMessages);
 
     /**
      * Generate or refresh this asset's native GPU block cache.
@@ -113,6 +133,14 @@ public:
         int32& OutSucceeded,
         int32& OutFailed,
         int64& OutCacheSizeBytes);
+
+    /**
+     * Warm native caches on a worker thread. The input assets are snapshotted on call; the worker does not touch UObjects.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void WarmNativeCacheForTexturesAsync(
+        const TArray<UBasisTexture*>& Textures,
+        FBasisNativeCacheWarmupComplete OnComplete);
 
     /**
      * Warm part of a texture list. Call repeatedly from a loading screen until it returns true.

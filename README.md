@@ -107,11 +107,13 @@ Footprint-Optimized mode keeps both download size and installed size small. It i
 
 Download-Optimized Native Cache mode keeps the installer small, then generates platform-native GPU blocks after install or first launch. Installed size grows toward the native BC/ASTC footprint, but subsequent loads skip Basis transcoding and behave closer to ordinary native textures.
 
-The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, call `WarmNativeCacheForTextures()` during a first-launch preparation step, or call `WarmNativeCacheForTexturesBudgeted()` repeatedly from a loading screen to populate `Saved/BasisNativeCache` in small batches.
+The prototype exposes this as `RuntimeStorageMode` on each `UBasisTexture`. Games can either let cache files be generated lazily on first load, call `WarmNativeCacheForTextures()` during a first-launch preparation step, call `WarmNativeCacheForTexturesBudgeted()` repeatedly from a loading screen, or call `WarmNativeCacheForTexturesAsync()` to populate `Saved/BasisNativeCache` on a worker thread.
 
 Imported assets also store an editable `TextureSemantic` (`Color` or `Normal Map`). The importer guesses the initial value from common filename suffixes such as `_nor`, `_normal`, and `_nrm`, but runtime transcoding and native cache keys use the stored asset value rather than re-reading the filename. Existing assets created before this metadata existed are migrated on load by applying the same filename guess once.
 
-Before a release build, call `ValidateRuntimeConfiguration()` on Basis assets to report blocking metadata errors and production warnings such as missing native cache warm-up or the current base-mip-only runtime path.
+`NativeTargetProfile` controls the native output family. `Default For Current Platform` resolves to Desktop BC on desktop builds and ASTC 8x8 on iOS/Android builds. It can also be pinned explicitly to `Desktop BC` or `Mobile ASTC 8x8`.
+
+Before a release build, call `ValidateRuntimeConfiguration()` on individual Basis assets or `ValidateRuntimeConfigurationsForTextures()` for a batch to report blocking metadata errors and production warnings such as missing native cache warm-up or source assets that only contain a base mip.
 
 ---
 
@@ -226,15 +228,16 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 
 ## Plugin Implementation Notes
 
-- Normal maps (filename contains `_nor_`) are transcoded to **BC7_RGBA** at runtime.
-- All other textures (albedo) are transcoded to **BC1_RGB** at runtime.
+- `TextureSemantic = Normal Map` assets are transcoded to **BC7_RGBA** under the Desktop BC profile.
+- `TextureSemantic = Color` assets are transcoded to **BC1_RGB** under the Desktop BC profile.
+- `NativeTargetProfile = Mobile ASTC 8x8` transcodes both color and normal-map assets to **ASTC_8x8_RGBA** blocks, with sRGB controlled by `TextureSemantic`.
 - **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
-- Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
+- Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode all available mip levels directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
 - `TextureSemantic` controls whether an asset is treated as color data or normal-map data. The importer guesses the initial value from the filename, but production assets should verify it explicitly in the asset details panel.
-- `ValidateRuntimeConfiguration()` reports asset metadata errors and release-readiness warnings that can be surfaced in editor tooling or a pre-package validation step.
+- `ValidateRuntimeConfiguration()` and `ValidateRuntimeConfigurationsForTextures()` report asset metadata errors and release-readiness warnings that can be surfaced in editor tooling or a pre-package validation step.
 - `RuntimeStorageMode` controls whether an imported asset stays in Footprint-Optimized mode or writes native GPU blocks into `Saved/BasisNativeCache` for Download-Optimized Native Cache mode.
-- `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
-- Native cache files include a cache version and target GPU profile, are keyed by source data and `TextureSemantic`, are written through a temporary file, and are discarded/regenerated when invalid or stale.
+- `WarmNativeCache()`, `WarmNativeCacheForTexturesBudgeted()`, `WarmNativeCacheForTexturesAsync()`, `ClearNativeCache()`, `HasNativeCache()`, and batch warm/clear helpers provide the prototype workflow for first-launch cache population and cache management.
+- Native cache files include a cache version, target GPU profile, and per-mip layout, are keyed by source data, `TextureSemantic`, and `NativeTargetProfile`, are written through a temporary file, and are discarded/regenerated when invalid or stale.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
@@ -276,15 +279,15 @@ Today, developers must manually assess each texture's role (hero vs. secondary, 
 
 This kind of per-texture quality allocation is only possible with a continuous bitrate space like XUASTC LDR. Fixed-bitrate GPU formats (BC1, BC7) cannot offer it.
 
-### 3. Mip Streaming Support
+### 3. Cooked Texture Streaming Integration
 
-The current implementation loads only mip level 0 (full resolution). A production-ready integration requires full mip chain support and compatibility with UE5's texture streaming system:
+The runtime transcode path now builds a complete mip chain when the source Basis/KTX2 file contains mip levels. Full production integration still needs compatibility with UE5's cooked texture streaming system:
 
 - Encode and store all mip levels in the KTX2 container at cook time
 - At runtime, integrate with `FStreamableRenderResourceState` so UE5's streaming manager can request individual mip levels on demand
 - Reduce initial VRAM usage and support large open-world scenes where texture streaming is critical
 
-Mip streaming support is a prerequisite for any production use case.
+Cooked texture streaming integration is still a prerequisite for large open-world production use cases.
 
 ### 4. Runtime Storage Policies
 
@@ -293,7 +296,7 @@ The current prototype stores imported Basis Universal bytes in `UBasisTexture` a
 - **Footprint-Optimized**: keep installed assets as Basis/KTX2 and transcode on load.
 - **Download-Optimized Native Cache**: keep the shipping payload small, then persist transcoded native GPU blocks under `Saved/BasisNativeCache` after first use.
 
-The prototype includes synchronous cache warm-up helpers for first-launch preparation. A production implementation still needs async cache warm-up, cache invalidation tied to cooked asset versions, platform-specific cache locations, and direct integration with cooked `UTexture2D` bulk data so runtime loading behaves like native UE texture streaming instead of a transient texture demo path.
+The prototype includes synchronous, budgeted, and worker-thread cache warm-up helpers for first-launch preparation. A production implementation still needs cache invalidation tied to cooked asset versions, platform-specific cache policy hooks, and direct integration with cooked `UTexture2D` bulk data so runtime loading behaves like native UE texture streaming instead of a transient texture path.
 
 ---
 

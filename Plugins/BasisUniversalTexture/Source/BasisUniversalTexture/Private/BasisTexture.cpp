@@ -1,6 +1,7 @@
 #include "BasisTexture.h"
 #include "BasisTextureLoader.h"
 
+#include "Async/Async.h"
 #include "HAL/FileManager.h"
 #include "Misc/Crc.h"
 #include "Misc/FileHelper.h"
@@ -11,11 +12,34 @@
 namespace
 {
     constexpr uint32 NativeCacheMagic = 0x424E5443; // BNTC
-    constexpr int32 NativeCacheVersion = 2;
-    constexpr int32 BasisMetadataCurrentVersion = 2;
+    constexpr int32 NativeCacheVersion = 3;
+    constexpr int32 BasisMetadataCurrentVersion = 3;
 
-    FString GetNativeCacheTargetProfile(EBasisTextureSemantic TextureSemantic)
+    EBasisNativeTargetProfile ResolveNativeTargetProfile(EBasisNativeTargetProfile TargetProfile)
     {
+        if (TargetProfile != EBasisNativeTargetProfile::DefaultForCurrentPlatform)
+        {
+            return TargetProfile;
+        }
+
+#if PLATFORM_ANDROID || PLATFORM_IOS
+        return EBasisNativeTargetProfile::MobileASTC8x8;
+#else
+        return EBasisNativeTargetProfile::DesktopBC;
+#endif
+    }
+
+    FString GetNativeCacheTargetProfile(
+        EBasisTextureSemantic TextureSemantic,
+        EBasisNativeTargetProfile NativeTargetProfile)
+    {
+        if (ResolveNativeTargetProfile(NativeTargetProfile) == EBasisNativeTargetProfile::MobileASTC8x8)
+        {
+            return TextureSemantic == EBasisTextureSemantic::NormalMap
+                ? TEXT("mobile_astc8x8_normal")
+                : TEXT("mobile_astc8x8_color");
+        }
+
         return TextureSemantic == EBasisTextureSemantic::NormalMap
             ? TEXT("desktop_bc7_normal")
             : TEXT("desktop_bc1_color");
@@ -33,13 +57,25 @@ namespace
 
     FString GetNativeCachePath(const UBasisTexture* Texture)
     {
-        return BuildNativeCachePath(Texture, GetNativeCacheTargetProfile(Texture->TextureSemantic));
+        return BuildNativeCachePath(
+            Texture,
+            GetNativeCacheTargetProfile(Texture->TextureSemantic, Texture->NativeTargetProfile));
     }
 
     FString GetLegacyNativeCachePath(const UBasisTexture* Texture)
     {
         return BuildNativeCachePath(Texture, TEXT("desktop_bc1_bc7"));
     }
+
+    struct FNativeCacheBuildRequest
+    {
+        TArray<uint8> BasisData;
+        FString SourceName;
+        EBasisTextureSemantic TextureSemantic = EBasisTextureSemantic::Color;
+        EBasisNativeTargetProfile NativeTargetProfile = EBasisNativeTargetProfile::DefaultForCurrentPlatform;
+        FString CachePath;
+        FString TargetProfile;
+    };
 
     bool SaveNativeCache(
         const FString& CachePath,
@@ -61,6 +97,7 @@ namespace
         FString SourceFormat = Info.SourceFormat;
         FString TranscodedFormat = Info.TranscodedFormat;
         int32 NativeBlockSize = NativeBlocks.Num();
+        int32 NativeMipCount = Info.NativeMips.Num();
 
         Ar << Magic;
         Ar << Version;
@@ -73,6 +110,18 @@ namespace
         Ar << CompressionRatio;
         Ar << SourceFormat;
         Ar << TranscodedFormat;
+        Ar << NativeMipCount;
+        for (const FBasisNativeMipInfo& MipInfo : Info.NativeMips)
+        {
+            int32 MipWidth = MipInfo.Width;
+            int32 MipHeight = MipInfo.Height;
+            int32 MipOffsetBytes = MipInfo.OffsetBytes;
+            int32 MipSizeBytes = MipInfo.SizeBytes;
+            Ar << MipWidth;
+            Ar << MipHeight;
+            Ar << MipOffsetBytes;
+            Ar << MipSizeBytes;
+        }
         Ar << NativeBlockSize;
         Ar.Serialize(const_cast<uint8*>(NativeBlocks.GetData()), NativeBlockSize);
 
@@ -122,7 +171,9 @@ namespace
         float CompressionRatio = 0.f;
         FString SourceFormat;
         FString TranscodedFormat;
+        int32 NativeMipCount = 0;
         int32 NativeBlockSize = 0;
+        TArray<FBasisNativeMipInfo> NativeMips;
 
         Ar << Magic;
         Ar << Version;
@@ -135,6 +186,19 @@ namespace
         Ar << CompressionRatio;
         Ar << SourceFormat;
         Ar << TranscodedFormat;
+        Ar << NativeMipCount;
+        if (NativeMipCount <= 0 || NativeMipCount > 32)
+        {
+            return false;
+        }
+        NativeMips.SetNum(NativeMipCount);
+        for (FBasisNativeMipInfo& MipInfo : NativeMips)
+        {
+            Ar << MipInfo.Width;
+            Ar << MipInfo.Height;
+            Ar << MipInfo.OffsetBytes;
+            Ar << MipInfo.SizeBytes;
+        }
         Ar << NativeBlockSize;
 
         if (Ar.IsError()
@@ -149,6 +213,26 @@ namespace
             return false;
         }
         if (Width <= 0 || Height <= 0 || MipLevels <= 0 || TranscodedSize != NativeBlockSize)
+        {
+            return false;
+        }
+        if (NativeMips.Num() != MipLevels)
+        {
+            return false;
+        }
+        int32 ExpectedOffset = 0;
+        for (const FBasisNativeMipInfo& MipInfo : NativeMips)
+        {
+            if (MipInfo.Width <= 0
+                || MipInfo.Height <= 0
+                || MipInfo.OffsetBytes != ExpectedOffset
+                || MipInfo.SizeBytes <= 0)
+            {
+                return false;
+            }
+            ExpectedOffset += MipInfo.SizeBytes;
+        }
+        if (ExpectedOffset != NativeBlockSize)
         {
             return false;
         }
@@ -170,11 +254,15 @@ namespace
         OutInfo.CompressionRatio = CompressionRatio;
         OutInfo.SourceFormat = SourceFormat;
         OutInfo.TranscodedFormat = TranscodedFormat;
+        OutInfo.NativeMips = NativeMips;
         return true;
     }
 
-    bool BuildNativeCache(
-        const UBasisTexture* Texture,
+    bool BuildNativeCacheFromData(
+        const TArray<uint8>& BasisData,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        EBasisNativeTargetProfile NativeTargetProfile,
         const FString& CachePath,
         const FString& TargetProfile,
         FBasisTranscodeInfo& OutInfo,
@@ -184,7 +272,12 @@ namespace
         bOutCacheSaved = false;
 
         if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
-                Texture->BasisData, Texture->GetName(), Texture->TextureSemantic, OutInfo, OutNativeBlocks))
+                BasisData,
+                SourceName,
+                TextureSemantic,
+                NativeTargetProfile,
+                OutInfo,
+                OutNativeBlocks))
         {
             return false;
         }
@@ -201,6 +294,32 @@ namespace
 
         return true;
     }
+
+    bool BuildNativeCache(
+        const UBasisTexture* Texture,
+        const FString& CachePath,
+        const FString& TargetProfile,
+        FBasisTranscodeInfo& OutInfo,
+        TArray<uint8>& OutNativeBlocks,
+        bool& bOutCacheSaved)
+    {
+        return BuildNativeCacheFromData(
+            Texture->BasisData,
+            Texture->GetName(),
+            Texture->TextureSemantic,
+            Texture->NativeTargetProfile,
+            CachePath,
+            TargetProfile,
+            OutInfo,
+            OutNativeBlocks,
+            bOutCacheSaved);
+    }
+
+    int64 GetCacheFileSize(const FString& CachePath)
+    {
+        const FFileStatData StatData = IFileManager::Get().GetStatData(*CachePath);
+        return StatData.bIsValid ? StatData.FileSize : 0;
+    }
 }
 
 void UBasisTexture::PostLoad()
@@ -216,6 +335,10 @@ void UBasisTexture::PostLoad()
         if (BasisMetadataVersion < 2 && MipLevels <= 0)
         {
             MipLevels = 1;
+        }
+        if (BasisMetadataVersion < 3)
+        {
+            NativeTargetProfile = EBasisNativeTargetProfile::DefaultForCurrentPlatform;
         }
         BasisMetadataVersion = BasisMetadataCurrentVersion;
     }
@@ -251,9 +374,17 @@ bool UBasisTexture::ValidateRuntimeConfiguration(TArray<FString>& OutErrors, TAr
         OutWarnings.Add(TEXT("Only the base mip is available; UE texture streaming integration is not enabled."));
     }
 
-    const FString ExpectedFormat = TextureSemantic == EBasisTextureSemantic::NormalMap
-        ? TEXT("BC7_RGBA")
-        : TEXT("BC1_RGB");
+    FString ExpectedFormat;
+    if (ResolveNativeTargetProfile(NativeTargetProfile) == EBasisNativeTargetProfile::MobileASTC8x8)
+    {
+        ExpectedFormat = TEXT("ASTC_8x8_RGBA");
+    }
+    else
+    {
+        ExpectedFormat = TextureSemantic == EBasisTextureSemantic::NormalMap
+            ? TEXT("BC7_RGBA")
+            : TEXT("BC1_RGB");
+    }
     if (!TranscodedFormat.IsEmpty() && TranscodedFormat != ExpectedFormat)
     {
         OutWarnings.Add(FString::Printf(
@@ -270,6 +401,50 @@ bool UBasisTexture::ValidateRuntimeConfiguration(TArray<FString>& OutErrors, TAr
     return OutErrors.Num() == 0;
 }
 
+bool UBasisTexture::ValidateRuntimeConfigurationsForTextures(
+    const TArray<UBasisTexture*>& Textures,
+    int32& OutValid,
+    int32& OutInvalid,
+    TArray<FString>& OutMessages)
+{
+    OutValid = 0;
+    OutInvalid = 0;
+    OutMessages.Reset();
+
+    for (const UBasisTexture* Texture : Textures)
+    {
+        if (!Texture)
+        {
+            ++OutInvalid;
+            OutMessages.Add(TEXT("<null>: invalid Basis texture reference."));
+            continue;
+        }
+
+        TArray<FString> Errors;
+        TArray<FString> Warnings;
+        const bool bValid = Texture->ValidateRuntimeConfiguration(Errors, Warnings);
+        if (bValid)
+        {
+            ++OutValid;
+        }
+        else
+        {
+            ++OutInvalid;
+        }
+
+        for (const FString& Error : Errors)
+        {
+            OutMessages.Add(FString::Printf(TEXT("%s: ERROR: %s"), *Texture->GetName(), *Error));
+        }
+        for (const FString& Warning : Warnings)
+        {
+            OutMessages.Add(FString::Printf(TEXT("%s: WARNING: %s"), *Texture->GetName(), *Warning));
+        }
+    }
+
+    return OutInvalid == 0;
+}
+
 UTexture2D* UBasisTexture::Transcode()
 {
     if (BasisData.Num() == 0)
@@ -281,17 +456,27 @@ UTexture2D* UBasisTexture::Transcode()
     FBasisTranscodeInfo Info;
     if (RuntimeStorageMode == EBasisRuntimeStorageMode::FootprintOptimized)
     {
-        return UBasisTextureLoader::LoadBasisTextureFromMemory(BasisData, GetName(), TextureSemantic, Info);
+        return UBasisTextureLoader::LoadBasisTextureFromMemory(
+            BasisData,
+            GetName(),
+            TextureSemantic,
+            NativeTargetProfile,
+            Info);
     }
 
     TArray<uint8> NativeBlocks;
-    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic);
+    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic, NativeTargetProfile);
     const FString CachePath = GetNativeCachePath(this);
     if (LoadNativeCache(CachePath, TargetProfile, Info, NativeBlocks))
     {
         UE_LOG(LogTemp, Log, TEXT("UBasisTexture::Transcode: native cache hit: %s"), *CachePath);
         if (UTexture2D* CachedTexture =
-                UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName(), TextureSemantic))
+                UBasisTextureLoader::CreateTextureFromNativeBlocks(
+                    NativeBlocks,
+                    Info,
+                    GetName(),
+                    TextureSemantic,
+                    NativeTargetProfile))
         {
             return CachedTexture;
         }
@@ -308,7 +493,12 @@ UTexture2D* UBasisTexture::Transcode()
         return nullptr;
     }
 
-    return UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName(), TextureSemantic);
+    return UBasisTextureLoader::CreateTextureFromNativeBlocks(
+        NativeBlocks,
+        Info,
+        GetName(),
+        TextureSemantic,
+        NativeTargetProfile);
 }
 
 bool UBasisTexture::WarmNativeCache()
@@ -321,7 +511,7 @@ bool UBasisTexture::WarmNativeCache()
 
     FBasisTranscodeInfo Info;
     TArray<uint8> NativeBlocks;
-    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic);
+    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic, NativeTargetProfile);
     const FString CachePath = GetNativeCachePath(this);
     if (LoadNativeCache(CachePath, TargetProfile, Info, NativeBlocks))
     {
@@ -370,8 +560,7 @@ bool UBasisTexture::HasNativeCache() const
 
 int64 UBasisTexture::GetNativeCacheSizeBytes() const
 {
-    const FFileStatData StatData = IFileManager::Get().GetStatData(*GetNativeCachePath(this));
-    return StatData.bIsValid ? StatData.FileSize : 0;
+    return GetCacheFileSize(GetNativeCachePath(this));
 }
 
 void UBasisTexture::WarmNativeCacheForTextures(
@@ -389,6 +578,93 @@ void UBasisTexture::WarmNativeCacheForTextures(
         OutSucceeded,
         OutFailed,
         OutCacheSizeBytes);
+}
+
+void UBasisTexture::WarmNativeCacheForTexturesAsync(
+    const TArray<UBasisTexture*>& Textures,
+    FBasisNativeCacheWarmupComplete OnComplete)
+{
+    TArray<FNativeCacheBuildRequest> Requests;
+    int32 InitialFailed = 0;
+
+    for (const UBasisTexture* Texture : Textures)
+    {
+        if (!Texture || Texture->BasisData.Num() == 0)
+        {
+            ++InitialFailed;
+            continue;
+        }
+
+        FNativeCacheBuildRequest Request;
+        Request.BasisData = Texture->BasisData;
+        Request.SourceName = Texture->GetName();
+        Request.TextureSemantic = Texture->TextureSemantic;
+        Request.NativeTargetProfile = Texture->NativeTargetProfile;
+        Request.CachePath = GetNativeCachePath(Texture);
+        Request.TargetProfile = GetNativeCacheTargetProfile(Texture->TextureSemantic, Texture->NativeTargetProfile);
+        Requests.Add(MoveTemp(Request));
+    }
+
+    if (Requests.Num() == 0)
+    {
+        AsyncTask(ENamedThreads::GameThread,
+            [OnComplete, InitialFailed]() mutable
+            {
+                OnComplete.ExecuteIfBound(0, InitialFailed, 0);
+            });
+        return;
+    }
+
+    Async(EAsyncExecution::ThreadPool,
+        [Requests = MoveTemp(Requests), InitialFailed, OnComplete]() mutable
+        {
+            int32 Succeeded = 0;
+            int32 Failed = InitialFailed;
+            int64 CacheSizeBytes = 0;
+
+            for (const FNativeCacheBuildRequest& Request : Requests)
+            {
+                FBasisTranscodeInfo Info;
+                TArray<uint8> NativeBlocks;
+                if (LoadNativeCache(Request.CachePath, Request.TargetProfile, Info, NativeBlocks))
+                {
+                    ++Succeeded;
+                    CacheSizeBytes += GetCacheFileSize(Request.CachePath);
+                    continue;
+                }
+                if (FPaths::FileExists(Request.CachePath))
+                {
+                    IFileManager::Get().Delete(*Request.CachePath);
+                }
+
+                bool bCacheSaved = false;
+                if (BuildNativeCacheFromData(
+                        Request.BasisData,
+                        Request.SourceName,
+                        Request.TextureSemantic,
+                        Request.NativeTargetProfile,
+                        Request.CachePath,
+                        Request.TargetProfile,
+                        Info,
+                        NativeBlocks,
+                        bCacheSaved)
+                    && bCacheSaved)
+                {
+                    ++Succeeded;
+                    CacheSizeBytes += GetCacheFileSize(Request.CachePath);
+                }
+                else
+                {
+                    ++Failed;
+                }
+            }
+
+            AsyncTask(ENamedThreads::GameThread,
+                [OnComplete, Succeeded, Failed, CacheSizeBytes]() mutable
+                {
+                    OnComplete.ExecuteIfBound(Succeeded, Failed, CacheSizeBytes);
+                });
+        });
 }
 
 bool UBasisTexture::WarmNativeCacheForTexturesBudgeted(

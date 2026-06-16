@@ -44,6 +44,10 @@ struct BASISUNIVERSALTEXTURE_API FBasisTranscodeInfo
     /** Runtime GPU target format string (BC1_RGB, BC7_RGBA, etc.) */
     UPROPERTY(BlueprintReadOnly, Category = "Basis")
     FString TranscodedFormat;
+
+    /** Native block layout for each transcoded mip level. */
+    UPROPERTY(BlueprintReadOnly, Category = "Basis")
+    TArray<FBasisNativeMipInfo> NativeMips;
 };
 
 /**
@@ -96,6 +100,16 @@ public:
         FBasisTranscodeInfo& OutInfo);
 
     /**
+     * Transcode .basis or .ktx2 bytes already loaded in memory for an explicit native target profile.
+     */
+    static UTexture2D* LoadBasisTextureFromMemory(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        EBasisNativeTargetProfile TargetProfile,
+        FBasisTranscodeInfo& OutInfo);
+
+    /**
      * Transcode Basis Universal bytes to platform-native compressed GPU blocks.
      * This does not create a UTexture2D and can be used to populate a native cache.
      * Uses GuessTextureSemanticFromName() for backwards compatibility.
@@ -118,6 +132,17 @@ public:
         TArray<uint8>& OutNativeBlocks);
 
     /**
+     * Transcode Basis Universal bytes to an explicit native target profile.
+     */
+    static bool TranscodeBasisTextureToNativeBlocks(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        EBasisNativeTargetProfile TargetProfile,
+        FBasisTranscodeInfo& OutInfo,
+        TArray<uint8>& OutNativeBlocks);
+
+    /**
      * Create a transient UTexture2D from native compressed GPU blocks.
      * Uses GuessTextureSemanticFromName() for backwards compatibility.
      */
@@ -134,6 +159,16 @@ public:
         const FBasisTranscodeInfo& Info,
         const FString& SourceName,
         EBasisTextureSemantic TextureSemantic);
+
+    /**
+     * Create a transient UTexture2D from native compressed GPU blocks for an explicit native target profile.
+     */
+    static UTexture2D* CreateTextureFromNativeBlocks(
+        const TArray<uint8>& NativeBlocks,
+        const FBasisTranscodeInfo& Info,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        EBasisNativeTargetProfile TargetProfile);
 
     /**
      * Estimate how large an equivalent BC7 texture would be for a given resolution.
