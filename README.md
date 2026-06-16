@@ -202,6 +202,114 @@ BasisDemo.uproject
 
 ---
 
+## Installation
+
+This plugin is currently a source plugin. It is intended for C++ UE5 projects or Blueprint projects that can be converted to C++ so Unreal can compile the plugin.
+
+### 1. Copy the plugin into your project
+
+Copy the plugin folder into your Unreal project:
+
+```text
+<YourProject>/
+└── Plugins/
+    └── BasisUniversalTexture/
+```
+
+If your project does not already have a `Plugins` folder, create it first.
+
+### 2. Enable the plugin
+
+Either enable it from **Edit > Plugins > Rendering > Basis Universal Texture**, or add it to the `Plugins` array in your `.uproject`:
+
+```json
+{
+  "Plugins": [
+    {
+      "Name": "BasisUniversalTexture",
+      "Enabled": true
+    }
+  ]
+}
+```
+
+Regenerate project files, then build your project in Visual Studio. The plugin contains both a runtime module and an editor importer module.
+
+### 3. Import Basis/KTX2 assets
+
+Drag `.basis` or `.ktx2` files into the Content Browser. The importer creates `UBasisTexture` assets and stores the compressed source bytes in the asset by default.
+
+After import, review these fields in the asset details panel:
+
+| Field | Recommended setup |
+|---|---|
+| `TextureSemantic` | `Color`, `Color With Alpha`, `Normal Map`, or `Data / Linear` |
+| `NativeTargetProfile` | `Desktop BC Fast Runtime` for PC testing, `Desktop BC Quality` for BC7, or `Mobile ASTC 8x8` for ASTC devices |
+| `RuntimeStorageMode` | `Footprint Optimized` for smallest installed size, or one of the native-cache modes to avoid repeated runtime transcodes |
+
+The importer guesses `TextureSemantic` from common filename suffixes, but production assets should be checked explicitly.
+
+### 4. Bind Basis textures to materials
+
+The current integration model does not replace UE's standard `UTexture2D` compression pipeline yet. Instead, materials keep small placeholder `Texture2D` references for cooking, and `ABasisTextureMaterialBinder` replaces selected material texture parameters at runtime.
+
+For a level-based setup:
+
+1. Place a `BasisTextureMaterialBinder` actor in the level.
+2. Add entries to `Material Bindings`.
+3. Set `Source Material` to the material or material instance used by scene components.
+4. Add each texture parameter name and assign the corresponding `UBasisTexture`.
+5. Enable `Apply To World On Begin Play`.
+
+At runtime, the Binder creates dynamic material instances, transcodes each referenced `UBasisTexture` once, caches the resulting transient `UTexture2D`, and assigns it to matching material slots.
+
+### 5. Validate before packaging
+
+Run validation before a release package:
+
+```powershell
+UnrealEditor-Cmd.exe <YourProject>.uproject -run=BasisTextureValidation -Path=/Game -FailOnWarnings
+```
+
+For projects that want a small download but no repeated runtime transcode, warm the native cache before packaging or during first-launch preparation:
+
+```powershell
+UnrealEditor-Cmd.exe <YourProject>.uproject -run=BasisTextureValidation -Path=/Game -WarmCache -FailOnWarnings
+```
+
+For install-time native-only releases:
+
+```powershell
+UnrealEditor-Cmd.exe <YourProject>.uproject -run=BasisTextureValidation -Path=/Game `
+  -ExternalizePayloads=BasisInstallPayloads `
+  -SetInstallTimeNativeOnly `
+  -WarmCache `
+  -DiscardExternalPayloads `
+  -FailOnWarnings
+```
+
+### 6. Package and measure
+
+Package the project normally after validation. To measure runtime transcode cost, launch the packaged build with:
+
+```powershell
+<YourGame>.exe -BasisTiming
+```
+
+This writes per-texture timings to:
+
+```text
+Saved/BasisTimings/basis_transcode_timings.csv
+```
+
+The CSV separates setup time from the net `transcode_image_level()` time. It does not include disk I/O, transient `UTexture2D` creation, material binding, or RHI upload.
+
+### Existing project size comparisons
+
+When comparing a Binder-based Basis build against an existing Standard build, build a cook whitelist from the Standard package and only convert textures that were actually cooked. This prevents unused converted `UBasisTexture` assets from being hard-referenced by the Binder and inflating the Basis package. See [Cook-whitelist Binder workflow](#cook-whitelist-binder-workflow) for the validation helper scripts used by this repository.
+
+---
+
 ## Workflow
 
 ### 1. Encode normal maps to XUASTC LDR 8×8
