@@ -8,5 +8,4 @@
 #include "RHI.h"
 #include "TextureResource.h"
 #include "Misc/Paths.h"
-#include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"

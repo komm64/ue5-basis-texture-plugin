@@ -2,8 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "Engine/Texture2D.h"
-#include "Misc/FileHelper.h"
-#include "HAL/FileManager.h"
 #include "BasisTextureLoader.generated.h"
 
 /**
@@ -68,6 +66,18 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Basis Universal",
               meta = (DisplayName = "Load Basis Texture"))
     static UTexture2D* LoadBasisTexture(const FString& FilePath, FBasisTranscodeInfo& OutInfo);
+
+    /**
+     * Transcode .basis or .ktx2 bytes already loaded in memory.
+     * @param SourceData Raw Basis Universal file bytes.
+     * @param SourceName Display/source name used for logging and normal-map detection.
+     * @param OutInfo    Size and format statistics for demo/comparison display.
+     * @return           Transient UTexture2D, or nullptr on failure.
+     */
+    static UTexture2D* LoadBasisTextureFromMemory(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        FBasisTranscodeInfo& OutInfo);
 
     /**
      * Estimate how large an equivalent BC7 texture would be for a given resolution.

@@ -5,8 +5,8 @@
 #include "BasisTextureFactory.generated.h"
 
 /**
- * Factory that imports .basis files into UBasisTexture assets.
- * Drop a .basis file into the Content Browser → UBasisTexture is created.
+ * Factory that imports .basis or .ktx2 files into UBasisTexture assets.
+ * Drop a Basis Universal file into the Content Browser to create a UBasisTexture.
  */
 UCLASS()
 class UBasisTextureFactory : public UFactory

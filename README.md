@@ -210,6 +210,7 @@ Runs `reimport_normals_uastc.py` via `UnrealEditor-Cmd.exe` to reimport KTX2 ass
 - Normal maps (filename contains `_nor_`) are transcoded to **BC7_RGBA** at runtime.
 - All other textures (albedo) are transcoded to **BC1_RGB** at runtime.
 - **Note on normal map format**: BC5_RG would be the preferred format (0.5 bpp vs BC7's 1 bpp, higher per-channel precision for 2-channel data), and the Standard build uses BC5 for its normal maps. However, transcoding XUASTC LDR to BC5_RG at runtime produced incorrect lighting regardless of channel layout or material sampler configuration. BC7_RGBA transcodes all channels correctly and resolves the issue. The root cause (likely a UE5 runtime behavior difference between transient `PF_BC5` textures and cooked BC5 assets) remains under investigation.
+- Imported `UBasisTexture` assets store the raw `.basis` / `.ktx2` bytes and transcode directly from memory; `LoadBasisTexture(FilePath)` remains as a standalone demo wrapper.
 - The transcoder uses `basist::ktx2_transcoder`, which handles UASTC+Zstd, XUASTC LDR, and ETC1S natively (`BASISD_SUPPORT_XUASTC=1` by default).
 - `PrivatePCHHeaderFile` is set to a plugin-local PCH to avoid loading the 2+ GB shared UE editor PCH on every incremental build.
 
@@ -261,9 +262,11 @@ The current implementation loads only mip level 0 (full resolution). A productio
 
 Mip streaming support is a prerequisite for any production use case.
 
-### 4. Direct Memory Transcoding
+### 4. Production Runtime Loading
 
-The current prototype writes a temporary file to disk before transcoding. The production implementation will transcode directly from the cooked asset's memory buffer, eliminating I/O overhead and making runtime loading competitive with native formats.
+The current prototype stores the imported Basis Universal bytes in `UBasisTexture` and transcodes from memory at runtime. The file-based loader remains available for standalone demo paths, but imported assets no longer need a temporary file round trip through `Saved/`.
+
+A production implementation still needs async loading, cache management, and direct integration with cooked `UTexture2D` bulk data so runtime loading behaves like native UE texture streaming instead of a transient texture demo path.
 
 ---
 

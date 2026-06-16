@@ -3,7 +3,6 @@
 #include "Engine/Texture2D.h"
 #include "RenderUtils.h"
 #include "Misc/Paths.h"
-#include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "RHI.h"
 #include "TextureResource.h"
@@ -46,7 +45,6 @@ static int64 EstimateBlockCompressedSize(int32 Width, int32 Height, int32 MipLev
 
 UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasisTranscodeInfo& OutInfo)
 {
-    // ---- 1. Read file ------------------------------------------------
     TArray<uint8> FileData;
     if (!FFileHelper::LoadFileToArray(FileData, *FilePath))
     {
@@ -54,10 +52,27 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         return nullptr;
     }
 
-    OutInfo.CompressedFileSize = FileData.Num();
+    return LoadBasisTextureFromMemory(FileData, FilePath, OutInfo);
+}
 
-    const void*  pData    = FileData.GetData();
-    const uint32 DataSize = static_cast<uint32>(FileData.Num());
+UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
+    const TArray<uint8>& SourceData,
+    const FString& SourceName,
+    FBasisTranscodeInfo& OutInfo)
+{
+    OutInfo = FBasisTranscodeInfo();
+
+    if (SourceData.Num() == 0)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: no source data: %s"), *SourceName);
+        return nullptr;
+    }
+
+    OutInfo.CompressedFileSize = SourceData.Num();
+
+    const void*  pData    = SourceData.GetData();
+    const uint32 DataSize = static_cast<uint32>(SourceData.Num());
+    const bool bIsNormalMap = SourceName.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
 
     uint32 Width = 0, Height = 0;
     TArray<uint8> Pixels;
@@ -69,7 +84,7 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         basist::ktx2_transcoder KTrans;
         if (!KTrans.init(pData, DataSize))
         {
-            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 init failed: %s"), *FilePath);
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 init failed: %s"), *SourceName);
             return nullptr;
         }
         if (!KTrans.start_transcoding())
@@ -89,8 +104,6 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
             const char* FmtName = basist::basis_get_tex_format_name(Fmt);
             OutInfo.SourceFormat = FString::Printf(TEXT("%hs (.ktx2)"), FmtName);
         }
-
-        const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
 
         if (bIsNormalMap)
         {
@@ -139,7 +152,7 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         basist::basisu_transcoder Trans;
         if (!Trans.validate_header(pData, DataSize))
         {
-            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: invalid .basis header: %s"), *FilePath);
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: invalid .basis header: %s"), *SourceName);
             return nullptr;
         }
 
@@ -171,7 +184,6 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         OutInfo.SourceFormat = (FileInfo.m_tex_format == basist::basis_tex_format::cUASTC_LDR_4x4)
                                ? TEXT("UASTC (.basis)") : TEXT("ETC1S (.basis)");
 
-        const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
         const uint32 BlocksX   = (Width  + 3) / 4;
         const uint32 BlocksY   = (Height + 3) / 4;
         const uint32 NumBlocks = BlocksX * BlocksY;
@@ -209,7 +221,6 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
     // ---- 4. Create UTexture2D ----------------------------------------
     // Normal maps use BC7 as a transient-texture workaround; BC5 remains the
     // intended production target once integrated into the UE texture pipeline.
-    const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
     const EPixelFormat PixelFmt = bIsNormalMap ? PF_BC7 : PF_DXT1;
 
     UTexture2D* Texture = UTexture2D::CreateTransient(Width, Height, PixelFmt);
@@ -247,7 +258,7 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
 
     UE_LOG(LogTemp, Log,
         TEXT("BasisTextureLoader: loaded %s [%ux%u] %s -> %s | disk=%lld bytes | gpu=%lld bytes | ratio=%.1fx"),
-        *FPaths::GetCleanFilename(FilePath),
+        *FPaths::GetCleanFilename(SourceName),
         Width, Height,
         *OutInfo.SourceFormat,
         *OutInfo.TranscodedFormat,

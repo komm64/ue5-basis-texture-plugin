@@ -1,8 +1,7 @@
 #include "BasisTextureFactory.h"
 #include "BasisTexture.h"
 #include "BasisTextureLoader.h"
-#include "Misc/FileHelper.h"
-#include "HAL/FileManager.h"
+#include "Misc/Paths.h"
 
 UBasisTextureFactory::UBasisTextureFactory()
 {
@@ -28,28 +27,22 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
 {
     UBasisTexture* Asset = NewObject<UBasisTexture>(InParent, InName, Flags);
 
-    // Store the raw .basis bytes
+    // Store the raw Basis Universal bytes
     const int64 DataSize = BufferEnd - Buffer;
     Asset->BasisData.SetNumUninitialized(DataSize);
     FMemory::Memcpy(Asset->BasisData.GetData(), Buffer, DataSize);
     Asset->CompressedSize = DataSize;
 
-    // Read metadata via Basis Universal transcoder to fill info fields
-    // (reuse LoadBasisTexture's info extraction via a temp file)
+    // Read metadata through the same in-memory path used at runtime.
     {
-        FString TempExt = FString(Type).ToLower();
-        if (TempExt.IsEmpty())
-        {
-            TempExt = TEXT("basis");
-        }
-
-        const FString TempPath = FPaths::ProjectSavedDir()
-            / FString::Printf(TEXT("BasisImportTemp_%s.%s"), *InName.ToString(), *TempExt);
-        FFileHelper::SaveArrayToFile(Asset->BasisData, *TempPath);
-
         FBasisTranscodeInfo Info;
-        UBasisTextureLoader::LoadBasisTexture(TempPath, Info);
-        IFileManager::Get().Delete(*TempPath);
+        UTexture2D* MetadataTexture =
+            UBasisTextureLoader::LoadBasisTextureFromMemory(Asset->BasisData, InName.ToString(), Info);
+        if (!MetadataTexture)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("BasisTextureFactory: failed to import %s"), *InName.ToString());
+            return nullptr;
+        }
 
         Asset->Width            = Info.Width;
         Asset->Height           = Info.Height;
