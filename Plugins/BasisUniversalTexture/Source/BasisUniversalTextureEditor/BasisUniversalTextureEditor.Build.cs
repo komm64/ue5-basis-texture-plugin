@@ -14,7 +14,7 @@ public class BasisUniversalTextureEditor : ModuleRules
 
         PrivateDependencyModuleNames.AddRange(new string[]
         {
-            "UnrealEd", "AssetTools", "AssetDefinition",
+            "UnrealEd", "AssetTools", "AssetDefinition", "AssetRegistry",
             "Slate", "SlateCore", "ToolMenus",
         });
     }

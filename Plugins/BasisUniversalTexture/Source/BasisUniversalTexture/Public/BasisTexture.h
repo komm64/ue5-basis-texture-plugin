@@ -21,6 +21,13 @@ DECLARE_DYNAMIC_DELEGATE_ThreeParams(
     int32, Failed,
     int64, CacheSizeBytes);
 
+DECLARE_DYNAMIC_DELEGATE_FourParams(
+    FBasisNativeCacheWarmupProgress,
+    int32, Processed,
+    int32, Total,
+    int32, Succeeded,
+    int32, Failed);
+
 /**
  * Asset that stores a Basis Universal compressed texture (.basis or .ktx2 format).
  *
@@ -74,6 +81,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
     EBasisNativeTargetProfile NativeTargetProfile = EBasisNativeTargetProfile::DefaultForCurrentPlatform;
 
+    /** Optional project/build key folded into native cache filenames for patch and compatibility invalidation. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
+    FString NativeCacheInvalidationKey;
+
     /** Internal version for import/runtime metadata migrations. */
     UPROPERTY()
     int32 BasisMetadataVersion = 0;
@@ -85,7 +96,7 @@ public:
     virtual void PostLoad() override;
 
     /**
-     * Transcode the stored Basis Universal data into a transient GPU-ready UTexture2D.
+     * Transcode the stored Basis Universal data into a runtime-created GPU-ready UTexture2D.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal")
     UTexture2D* Transcode();
@@ -140,6 +151,15 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
     static void WarmNativeCacheForTexturesAsync(
         const TArray<UBasisTexture*>& Textures,
+        FBasisNativeCacheWarmupComplete OnComplete);
+
+    /**
+     * Warm native caches on a worker thread and report progress on the game thread.
+     */
+    UFUNCTION(BlueprintCallable, Category = "Basis Universal|Native Cache")
+    static void WarmNativeCacheForTexturesAsyncWithProgress(
+        const TArray<UBasisTexture*>& Textures,
+        FBasisNativeCacheWarmupProgress OnProgress,
         FBasisNativeCacheWarmupComplete OnComplete);
 
     /**

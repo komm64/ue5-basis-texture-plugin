@@ -66,7 +66,7 @@ public:
      * Load a .basis or .ktx2 file from an absolute path and transcode it to a GPU-ready UTexture2D.
      * @param FilePath   Absolute path to the .basis or .ktx2 file.
      * @param OutInfo    Size and format statistics for demo/comparison display.
-     * @return           Transient UTexture2D, or nullptr on failure.
+     * @return           Runtime-created UTexture2D, or nullptr on failure.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal",
               meta = (DisplayName = "Load Basis Texture"))
@@ -91,7 +91,7 @@ public:
      * @param SourceName       Display/source name used for logging.
      * @param TextureSemantic  Explicit texture usage.
      * @param OutInfo          Size and format statistics for demo/comparison display.
-     * @return                 Transient UTexture2D, or nullptr on failure.
+     * @return                 Runtime-created UTexture2D, or nullptr on failure.
      */
     static UTexture2D* LoadBasisTextureFromMemory(
         const TArray<uint8>& SourceData,
@@ -143,7 +143,7 @@ public:
         TArray<uint8>& OutNativeBlocks);
 
     /**
-     * Create a transient UTexture2D from native compressed GPU blocks.
+     * Create a runtime UTexture2D from native compressed GPU blocks.
      * Uses GuessTextureSemanticFromName() for backwards compatibility.
      */
     static UTexture2D* CreateTextureFromNativeBlocks(
@@ -152,7 +152,7 @@ public:
         const FString& SourceName);
 
     /**
-     * Create a transient UTexture2D from native compressed GPU blocks.
+     * Create a runtime UTexture2D from native compressed GPU blocks.
      */
     static UTexture2D* CreateTextureFromNativeBlocks(
         const TArray<uint8>& NativeBlocks,
@@ -161,7 +161,7 @@ public:
         EBasisTextureSemantic TextureSemantic);
 
     /**
-     * Create a transient UTexture2D from native compressed GPU blocks for an explicit native target profile.
+     * Create a runtime UTexture2D from native compressed GPU blocks for an explicit native target profile.
      */
     static UTexture2D* CreateTextureFromNativeBlocks(
         const TArray<uint8>& NativeBlocks,

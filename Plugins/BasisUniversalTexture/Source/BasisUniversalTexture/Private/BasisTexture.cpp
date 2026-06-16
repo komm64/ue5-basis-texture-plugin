@@ -47,9 +47,13 @@ namespace
 
     FString BuildNativeCachePath(const UBasisTexture* Texture, const FString& TargetProfile)
     {
-        const uint32 DataCrc = Texture->BasisData.Num() > 0
+        uint32 DataCrc = Texture->BasisData.Num() > 0
             ? FCrc::MemCrc32(Texture->BasisData.GetData(), Texture->BasisData.Num())
             : 0;
+        if (!Texture->NativeCacheInvalidationKey.IsEmpty())
+        {
+            DataCrc = FCrc::StrCrc32(*Texture->NativeCacheInvalidationKey, DataCrc);
+        }
         const FString SafeName = FPaths::MakeValidFileName(Texture->GetName());
         return FPaths::ProjectSavedDir() / TEXT("BasisNativeCache")
             / FString::Printf(TEXT("%s_%08x_%s.ubasisnative"), *SafeName, DataCrc, *TargetProfile);
@@ -584,6 +588,17 @@ void UBasisTexture::WarmNativeCacheForTexturesAsync(
     const TArray<UBasisTexture*>& Textures,
     FBasisNativeCacheWarmupComplete OnComplete)
 {
+    WarmNativeCacheForTexturesAsyncWithProgress(
+        Textures,
+        FBasisNativeCacheWarmupProgress(),
+        OnComplete);
+}
+
+void UBasisTexture::WarmNativeCacheForTexturesAsyncWithProgress(
+    const TArray<UBasisTexture*>& Textures,
+    FBasisNativeCacheWarmupProgress OnProgress,
+    FBasisNativeCacheWarmupComplete OnComplete)
+{
     TArray<FNativeCacheBuildRequest> Requests;
     int32 InitialFailed = 0;
 
@@ -608,19 +623,22 @@ void UBasisTexture::WarmNativeCacheForTexturesAsync(
     if (Requests.Num() == 0)
     {
         AsyncTask(ENamedThreads::GameThread,
-            [OnComplete, InitialFailed]() mutable
+            [OnProgress, OnComplete, InitialFailed]() mutable
             {
+                OnProgress.ExecuteIfBound(InitialFailed, InitialFailed, 0, InitialFailed);
                 OnComplete.ExecuteIfBound(0, InitialFailed, 0);
             });
         return;
     }
 
     Async(EAsyncExecution::ThreadPool,
-        [Requests = MoveTemp(Requests), InitialFailed, OnComplete]() mutable
+        [Requests = MoveTemp(Requests), InitialFailed, OnProgress, OnComplete]() mutable
         {
             int32 Succeeded = 0;
             int32 Failed = InitialFailed;
             int64 CacheSizeBytes = 0;
+            int32 Processed = InitialFailed;
+            const int32 Total = Requests.Num() + InitialFailed;
 
             for (const FNativeCacheBuildRequest& Request : Requests)
             {
@@ -657,6 +675,13 @@ void UBasisTexture::WarmNativeCacheForTexturesAsync(
                 {
                     ++Failed;
                 }
+
+                ++Processed;
+                AsyncTask(ENamedThreads::GameThread,
+                    [OnProgress, Processed, Total, Succeeded, Failed]() mutable
+                    {
+                        OnProgress.ExecuteIfBound(Processed, Total, Succeeded, Failed);
+                    });
             }
 
             AsyncTask(ENamedThreads::GameThread,
