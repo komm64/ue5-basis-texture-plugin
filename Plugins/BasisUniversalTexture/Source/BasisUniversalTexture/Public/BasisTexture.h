@@ -5,10 +5,10 @@
 #include "BasisTexture.generated.h"
 
 /**
- * Asset that stores a Basis Universal compressed texture (.basis format).
+ * Asset that stores a Basis Universal compressed texture (.basis or .ktx2 format).
  *
- * At cook time: the raw .basis bytes are packed into the .uasset — much smaller
- * than a cooked BC7 texture.
+ * At cook time: the raw Basis Universal bytes are packed into the .uasset,
+ * much smaller than a cooked GPU-native texture.
  * At runtime: call Transcode() to decode into a GPU-ready UTexture2D.
  */
 UCLASS(BlueprintType)
@@ -17,7 +17,7 @@ class BASISUNIVERSALTEXTURE_API UBasisTexture : public UObject
     GENERATED_BODY()
 
 public:
-    /** Raw .basis file bytes — this is what gets stored in the .uasset */
+    /** Raw Basis Universal file bytes, stored directly in the .uasset */
     UPROPERTY()
     TArray<uint8> BasisData;
 
@@ -29,30 +29,34 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     int32 Height = 0;
 
-    /** Source codec: "ETC1S" or "UASTC" */
+    /** Source codec/container: "ETC1S", "UASTC", "XUASTC", etc. */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     FString SourceFormat;
+
+    /** Runtime GPU target format: "BC1_RGB", "BC7_RGBA", etc. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
+    FString TranscodedFormat;
 
     /** Compressed size in bytes (= asset size on disk) */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
     int64 CompressedSize = 0;
 
-    /** Equivalent BC7 size in bytes (what a normal UE texture would cost) */
+    /** Runtime GPU texture size in bytes after transcoding */
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Basis Info")
-    int64 BC7EquivalentSize = 0;
+    int64 TranscodedSize = 0;
 
     /**
-     * Transcode the stored .basis data into a transient GPU-ready UTexture2D.
+     * Transcode the stored Basis Universal data into a transient GPU-ready UTexture2D.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal")
     UTexture2D* Transcode();
 
-    /** Compression ratio: BC7EquivalentSize / CompressedSize */
+    /** Compression ratio: TranscodedSize / CompressedSize */
     UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal")
     float GetCompressionRatio() const
     {
         return CompressedSize > 0
-            ? static_cast<float>(BC7EquivalentSize) / static_cast<float>(CompressedSize)
+            ? static_cast<float>(TranscodedSize) / static_cast<float>(CompressedSize)
             : 0.f;
     }
 };

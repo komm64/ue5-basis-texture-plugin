@@ -30,6 +30,20 @@ static bool IsKTX2(const void* pData, uint32 DataSize)
     return FMemory::Memcmp(pData, KTX2Magic, 8) == 0;
 }
 
+static int64 EstimateBlockCompressedSize(int32 Width, int32 Height, int32 MipLevels, int32 BytesPerBlock)
+{
+    int64 Total = 0;
+    for (int32 L = 0; L < MipLevels; ++L)
+    {
+        const int32 W = FMath::Max(1, Width >> L);
+        const int32 H = FMath::Max(1, Height >> L);
+        const int32 BlocksX = (W + 3) / 4;
+        const int32 BlocksY = (H + 3) / 4;
+        Total += static_cast<int64>(BlocksX) * BlocksY * BytesPerBlock;
+    }
+    return Total;
+}
+
 UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasisTranscodeInfo& OutInfo)
 {
     // ---- 1. Read file ------------------------------------------------
@@ -85,6 +99,7 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
             // here as a demo workaround until the cooked texture pipeline path
             // can produce platform-native normal maps directly.
             // BC7_RGBA: 16 bytes per 4x4 block, all channels preserved.
+            OutInfo.TranscodedFormat = TEXT("BC7_RGBA");
             const uint32 BlocksX   = (Width  + 3) / 4;
             const uint32 BlocksY   = (Height + 3) / 4;
             const uint32 NumBlocks = BlocksX * BlocksY;
@@ -102,6 +117,7 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         else
         {
             // BC1_RGB: 8 bytes per 4x4 block
+            OutInfo.TranscodedFormat = TEXT("BC1_RGB");
             const uint32 BlocksX   = (Width  + 3) / 4;
             const uint32 BlocksY   = (Height + 3) / 4;
             const uint32 NumBlocks = BlocksX * BlocksY;
@@ -155,19 +171,38 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         OutInfo.SourceFormat = (FileInfo.m_tex_format == basist::basis_tex_format::cUASTC_LDR_4x4)
                                ? TEXT("UASTC (.basis)") : TEXT("ETC1S (.basis)");
 
-        // BC1_RGB: 8 bytes per 4x4 block
+        const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
         const uint32 BlocksX   = (Width  + 3) / 4;
         const uint32 BlocksY   = (Height + 3) / 4;
         const uint32 NumBlocks = BlocksX * BlocksY;
-        Pixels.SetNumUninitialized(NumBlocks * 8);
 
-        if (!Trans.transcode_image_level(
-                pData, DataSize, 0, 0,
-                Pixels.GetData(), NumBlocks,
-                basist::transcoder_texture_format::cTFBC1_RGB))
+        if (bIsNormalMap)
         {
-            UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: transcode failed"));
-            return nullptr;
+            OutInfo.TranscodedFormat = TEXT("BC7_RGBA");
+            Pixels.SetNumUninitialized(NumBlocks * 16);
+
+            if (!Trans.transcode_image_level(
+                    pData, DataSize, 0, 0,
+                    Pixels.GetData(), NumBlocks,
+                    basist::transcoder_texture_format::cTFBC7_RGBA))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: BC7 transcode failed"));
+                return nullptr;
+            }
+        }
+        else
+        {
+            OutInfo.TranscodedFormat = TEXT("BC1_RGB");
+            Pixels.SetNumUninitialized(NumBlocks * 8);
+
+            if (!Trans.transcode_image_level(
+                    pData, DataSize, 0, 0,
+                    Pixels.GetData(), NumBlocks,
+                    basist::transcoder_texture_format::cTFBC1_RGB))
+            {
+                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: BC1 transcode failed"));
+                return nullptr;
+            }
         }
     }
 
@@ -205,16 +240,17 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
     Texture->UpdateResource();
 
     // ---- 5. Fill stats -----------------------------------------------
-    // Estimate what BC7 w/ mips would cost for this resolution
-    OutInfo.TranscodedSize  = static_cast<int64>(EstimateBC7Size(Width, Height, 1));
+    const int32 BytesPerBlock = bIsNormalMap ? 16 : 8;
+    OutInfo.TranscodedSize  = EstimateBlockCompressedSize(Width, Height, 1, BytesPerBlock);
     OutInfo.CompressionRatio = static_cast<float>(OutInfo.TranscodedSize)
                              / static_cast<float>(OutInfo.CompressedFileSize);
 
     UE_LOG(LogTemp, Log,
-        TEXT("BasisTextureLoader: loaded %s [%ux%u] %s | disk=%lld bytes | BC7equiv=%lld bytes | ratio=%.1fx"),
+        TEXT("BasisTextureLoader: loaded %s [%ux%u] %s -> %s | disk=%lld bytes | gpu=%lld bytes | ratio=%.1fx"),
         *FPaths::GetCleanFilename(FilePath),
         Width, Height,
         *OutInfo.SourceFormat,
+        *OutInfo.TranscodedFormat,
         OutInfo.CompressedFileSize,
         OutInfo.TranscodedSize,
         OutInfo.CompressionRatio);
@@ -224,13 +260,5 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
 
 int64 UBasisTextureLoader::EstimateBC7Size(int32 Width, int32 Height, int32 MipLevels)
 {
-    int64 Total = 0;
-    for (int32 L = 0; L < MipLevels; ++L)
-    {
-        const int32 W = FMath::Max(1, Width  >> L);
-        const int32 H = FMath::Max(1, Height >> L);
-        // BC7: 16 bytes per 4x4 block = 1 byte per pixel
-        Total += static_cast<int64>(W) * H;
-    }
-    return Total;
+    return EstimateBlockCompressedSize(Width, Height, MipLevels, 16);
 }

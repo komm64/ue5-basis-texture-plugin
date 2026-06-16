@@ -48,8 +48,8 @@ void ABasisDemoActor::BeginPlay()
     }
 
     UE_LOG(LogTemp, Log,
-        TEXT("[BasisDemo] %s | %s | %dx%d | disk=%.1fKB | BC7=%.1fKB | %.1fx"),
-        *FPaths::GetCleanFilename(BasisFilePath), *Info.SourceFormat,
+        TEXT("[BasisDemo] %s | %s -> %s | %dx%d | disk=%.1fKB | gpu=%.1fKB | %.1fx"),
+        *FPaths::GetCleanFilename(BasisFilePath), *Info.SourceFormat, *Info.TranscodedFormat,
         Info.Width, Info.Height,
         Info.CompressedFileSize / 1024.f,
         Info.TranscodedSize / 1024.f,

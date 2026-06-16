@@ -14,11 +14,11 @@ class BASISDEMO_API AGalleryActor : public AActor
 public:
     AGalleryActor();
 
-    /** Standard albedo textures (BC7) */
+    /** Standard albedo textures (typically BC1 in the comparison build) */
     UPROPERTY(EditAnywhere, Category = "Gallery|Standard")
     TArray<UTexture2D*> StandardAlbedos;
 
-    /** Standard normal map textures (BC7) */
+    /** Standard normal map textures (typically BC5 in the comparison build) */
     UPROPERTY(EditAnywhere, Category = "Gallery|Standard")
     TArray<UTexture2D*> StandardNormals;
 
@@ -42,7 +42,7 @@ public:
     UPROPERTY(EditAnywhere, Category = "Gallery")
     float Spacing = 260.f;
 
-    /** Material with "Albedo" and "Normal" texture parameters */
+    /** Material with "Texture" and "Normal" texture parameters */
     UPROPERTY(EditAnywhere, Category = "Gallery")
     UMaterialInterface* DisplayMaterial = nullptr;
 

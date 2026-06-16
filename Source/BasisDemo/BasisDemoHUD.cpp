@@ -21,11 +21,12 @@ void ABasisDemoHUD::DrawHUD()
         EBlendMode::BLEND_Opaque);
 
     // Size comparison text on the left
-    const FString Line1 = FString::Printf(TEXT("Format:      %s"), *TexInfo.SourceFormat);
+    const FString Line1 = FString::Printf(TEXT("Source:      %s"), *TexInfo.SourceFormat);
     const FString Line2 = FString::Printf(TEXT("Resolution:  %d x %d"), TexInfo.Width, TexInfo.Height);
-    const FString Line3 = FString::Printf(TEXT(".basis size: %.1f KB  (on disk)"), TexInfo.CompressedFileSize / 1024.f);
-    const FString Line4 = FString::Printf(TEXT("BC7 equiv:   %.1f KB  (normal UE texture)"), TexInfo.TranscodedSize / 1024.f);
-    const FString Line5 = FString::Printf(TEXT("Ratio:       %.1fx smaller"), TexInfo.CompressionRatio);
+    const FString Line3 = FString::Printf(TEXT("Disk size:   %.1f KB"), TexInfo.CompressedFileSize / 1024.f);
+    const FString Line4 = FString::Printf(TEXT("GPU target:  %s"), *TexInfo.TranscodedFormat);
+    const FString Line5 = FString::Printf(TEXT("GPU size:    %.1f KB"), TexInfo.TranscodedSize / 1024.f);
+    const FString Line6 = FString::Printf(TEXT("Ratio:       %.1fx smaller"), TexInfo.CompressionRatio);
 
     float TY = H * 0.35f;
     const float LH = 32.f;
@@ -33,6 +34,7 @@ void ABasisDemoHUD::DrawHUD()
     DrawText(Line1, FLinearColor::White,  40, TY, nullptr, 1.2f); TY += LH;
     DrawText(Line2, FLinearColor::White,  40, TY, nullptr, 1.2f); TY += LH;
     DrawText(Line3, FLinearColor::Green,  40, TY, nullptr, 1.2f); TY += LH;
-    DrawText(Line4, FLinearColor::Red,    40, TY, nullptr, 1.2f); TY += LH;
-    DrawText(Line5, FLinearColor(0.f, 1.f, 1.f), 40, TY, nullptr, 1.4f);
+    DrawText(Line4, FLinearColor::White,  40, TY, nullptr, 1.2f); TY += LH;
+    DrawText(Line5, FLinearColor::Red,    40, TY, nullptr, 1.2f); TY += LH;
+    DrawText(Line6, FLinearColor(0.f, 1.f, 1.f), 40, TY, nullptr, 1.4f);
 }

@@ -18,7 +18,7 @@ struct BASISUNIVERSALTEXTURE_API FBasisTranscodeInfo
     UPROPERTY(BlueprintReadOnly, Category = "Basis")
     int64 CompressedFileSize = 0;
 
-    /** Equivalent BC7 size in memory (bytes) */
+    /** Transcoded GPU texture size in memory (bytes) */
     UPROPERTY(BlueprintReadOnly, Category = "Basis")
     int64 TranscodedSize = 0;
 
@@ -38,9 +38,13 @@ struct BASISUNIVERSALTEXTURE_API FBasisTranscodeInfo
     UPROPERTY(BlueprintReadOnly, Category = "Basis")
     int32 MipLevels = 0;
 
-    /** Source format string (ETC1S or UASTC) */
+    /** Source codec/container string (ETC1S, UASTC, XUASTC, etc.) */
     UPROPERTY(BlueprintReadOnly, Category = "Basis")
     FString SourceFormat;
+
+    /** Runtime GPU target format string (BC1_RGB, BC7_RGBA, etc.) */
+    UPROPERTY(BlueprintReadOnly, Category = "Basis")
+    FString TranscodedFormat;
 };
 
 /**
@@ -67,7 +71,7 @@ public:
 
     /**
      * Estimate how large an equivalent BC7 texture would be for a given resolution.
-     * Useful for showing the size delta in UI.
+     * Kept for Blueprint compatibility with the original demo HUD.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal",
               meta = (DisplayName = "Estimate BC7 Size"))
