@@ -46,8 +46,13 @@ public:
     UPROPERTY(EditAnywhere, Category = "Gallery")
     UMaterialInterface* DisplayMaterial = nullptr;
 
-    UPROPERTY(EditAnywhere, Category = "Gallery")
-    float SunRotationSpeed = 15.f;
+    /** Fixed sun pitch angle (negative = above horizon). */
+    UPROPERTY(EditAnywhere, Category = "Gallery|Sun")
+    float SunPitch = -35.f;
+
+    /** Fixed sun yaw angle. */
+    UPROPERTY(EditAnywhere, Category = "Gallery|Sun")
+    float SunYaw = 60.f;
 
 protected:
     virtual void BeginPlay() override;

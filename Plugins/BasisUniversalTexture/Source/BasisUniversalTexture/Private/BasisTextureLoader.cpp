@@ -18,9 +18,8 @@ THIRD_PARTY_INCLUDES_END
 // ------------------------------------------------------------------
 // UBasisTextureLoader implementation
 // ------------------------------------------------------------------
-// Normal maps (filename contains "nor"): transcoded to BC5_RG (2-channel,
-// 0.5 bpp) — correct GPU format for DX normal maps.
-// Albedo/other: transcoded to RGBA32 for reliable UE5 compatibility.
+// Normal maps (filename contains "nor"): transcoded to BC7_RGBA.
+// Albedo/other: transcoded to BC1_RGB.
 // ------------------------------------------------------------------
 
 // KTX2 magic: 0xAB 'K' 'T' 'X' ' ' '2' '0' 0xBB
@@ -81,7 +80,11 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
 
         if (bIsNormalMap)
         {
-            // BC5_RG: 16 bytes per 4x4 block (two BC4 channels)
+            // BC5 is the natural desktop target for normal maps, but this UE5.7
+            // transient texture path rendered incorrectly with PF_BC5. Use BC7
+            // here as a demo workaround until the cooked texture pipeline path
+            // can produce platform-native normal maps directly.
+            // BC7_RGBA: 16 bytes per 4x4 block, all channels preserved.
             const uint32 BlocksX   = (Width  + 3) / 4;
             const uint32 BlocksY   = (Height + 3) / 4;
             const uint32 NumBlocks = BlocksX * BlocksY;
@@ -90,9 +93,9 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
             if (!KTrans.transcode_image_level(
                     0, 0, 0,
                     Pixels.GetData(), NumBlocks,
-                    basist::transcoder_texture_format::cTFBC5_RG))
+                    basist::transcoder_texture_format::cTFBC7_RGBA))
             {
-                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC5 transcode failed"));
+                UE_LOG(LogTemp, Warning, TEXT("BasisTextureLoader: KTX2 BC7 transcode failed"));
                 return nullptr;
             }
         }
@@ -169,9 +172,10 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
     }
 
     // ---- 4. Create UTexture2D ----------------------------------------
-    // Normal maps use BC5 (PF_BC5), albedo/other use BC1 (PF_DXT1).
+    // Normal maps use BC7 as a transient-texture workaround; BC5 remains the
+    // intended production target once integrated into the UE texture pipeline.
     const bool bIsNormalMap = FilePath.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
-    const EPixelFormat PixelFmt = bIsNormalMap ? PF_BC5 : PF_DXT1;
+    const EPixelFormat PixelFmt = bIsNormalMap ? PF_BC7 : PF_DXT1;
 
     UTexture2D* Texture = UTexture2D::CreateTransient(Width, Height, PixelFmt);
     if (!Texture)
@@ -188,6 +192,15 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
         Mip0.BulkData.Unlock();
     }
 
+    if (bIsNormalMap)
+    {
+        Texture->CompressionSettings = TC_Normalmap;
+        Texture->SRGB = false;
+    }
+    else
+    {
+        Texture->SRGB = true;
+    }
     Texture->NeverStream = true;
     Texture->UpdateResource();
 

@@ -9,7 +9,7 @@
  *
  * At cook time: the raw .basis bytes are packed into the .uasset — much smaller
  * than a cooked BC7 texture.
- * At runtime: call Transcode() to decode into a GPU-ready UTexture2D (BC7/ASTC).
+ * At runtime: call Transcode() to decode into a GPU-ready UTexture2D.
  */
 UCLASS(BlueprintType)
 class BASISUNIVERSALTEXTURE_API UBasisTexture : public UObject
@@ -42,8 +42,7 @@ public:
     int64 BC7EquivalentSize = 0;
 
     /**
-     * Transcode the stored .basis data into a transient UTexture2D (RGBA8).
-     * In production this would target BC7/ASTC for VRAM efficiency.
+     * Transcode the stored .basis data into a transient GPU-ready UTexture2D.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal")
     UTexture2D* Transcode();

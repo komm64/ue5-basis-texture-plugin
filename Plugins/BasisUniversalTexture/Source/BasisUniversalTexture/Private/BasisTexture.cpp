@@ -11,9 +11,10 @@ UTexture2D* UBasisTexture::Transcode()
     }
 
     FBasisTranscodeInfo Info;
-    // Write to a temp file so we can reuse the existing file-based loader
-    // (In production this would transcode directly from memory)
-    const FString TempPath = FPaths::ProjectSavedDir() / TEXT("BasisTemp.basis");
+    // Write to a temp file so we can reuse the existing file-based loader.
+    // Include the asset name so LoadBasisTexture's normal-map filename check still works.
+    const FString TempName = FString::Printf(TEXT("BasisTemp_%s.basis"), *GetName());
+    const FString TempPath = FPaths::ProjectSavedDir() / TempName;
     FFileHelper::SaveArrayToFile(BasisData, *TempPath);
 
     UTexture2D* Tex = UBasisTextureLoader::LoadBasisTexture(TempPath, Info);

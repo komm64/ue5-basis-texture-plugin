@@ -1,4 +1,6 @@
-# Basis Universal Texture Compression Demo for Unreal Engine 5
+# Basis Universal Texture Plugin for Unreal Engine 5
+
+Proof-of-concept UE5 plugin and demo project for runtime Basis Universal / KTX2 texture transcoding.
 
 ## Motivation
 

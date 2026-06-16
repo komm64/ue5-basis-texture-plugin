@@ -7,7 +7,7 @@
 #include "BasisTextureLoader.generated.h"
 
 /**
- * Transcodig result info for debug/demo purposes.
+ * Transcoding result info for debug/demo purposes.
  */
 USTRUCT(BlueprintType)
 struct BASISUNIVERSALTEXTURE_API FBasisTranscodeInfo
@@ -56,10 +56,10 @@ class BASISUNIVERSALTEXTURE_API UBasisTextureLoader : public UObject
 
 public:
     /**
-     * Load a .basis or .ktx2 file from an absolute path and transcode it to a BC7 UTexture2D.
+     * Load a .basis or .ktx2 file from an absolute path and transcode it to a GPU-ready UTexture2D.
      * @param FilePath   Absolute path to the .basis or .ktx2 file.
      * @param OutInfo    Size and format statistics for demo/comparison display.
-     * @return           Transient UTexture2D (BC7 on desktop, ASTC on mobile), or nullptr on failure.
+     * @return           Transient UTexture2D, or nullptr on failure.
      */
     UFUNCTION(BlueprintCallable, Category = "Basis Universal",
               meta = (DisplayName = "Load Basis Texture"))

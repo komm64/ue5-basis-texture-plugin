@@ -1,12 +1,8 @@
 #include "GalleryActor.h"
-#include "BasisTextureLoader.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
-#include "UObject/ConstructorHelpers.h"
 #include "Kismet/GameplayStatics.h"
-#include "Engine/Engine.h"
-#include "GameFramework/PlayerController.h"
 
 AGalleryActor::AGalleryActor()
 {
@@ -18,7 +14,7 @@ void AGalleryActor::BeginPlay()
 {
     Super::BeginPlay();
 
-    // Find the DirectionalLight to rotate it
+    // Find the DirectionalLight so both builds use the same comparison light.
     TArray<AActor*> Lights;
     UGameplayStatics::GetAllActorsOfClass(GetWorld(), ADirectionalLight::StaticClass(), Lights);
     if (Lights.Num() > 0)
@@ -46,26 +42,9 @@ void AGalleryActor::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    if (GEngine)
-    {
-        APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
-        FVector CamLoc = PC && PC->GetPawn() ? PC->GetPawn()->GetActorLocation() : FVector::ZeroVector;
-        GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::Green,
-            FString::Printf(TEXT("Cam: %.0f %.0f %.0f | Mat: %s"),
-                CamLoc.X, CamLoc.Y, CamLoc.Z,
-                DisplayMaterial ? *DisplayMaterial->GetName() : TEXT("NULL")));
-    }
-
     if (SunLight)
     {
-        float T = GetWorld()->GetTimeSeconds();
-        float Pitch = -45.0f + FMath::Sin(T * 0.8f) * 40.0f;
-        float Yaw   = 45.0f + T * SunRotationSpeed;
-        SunLight->SetActorRotation(FRotator(Pitch, Yaw, 0.0f));
-
-        if (GEngine)
-            GEngine->AddOnScreenDebugMessage(2, 0.f, FColor::Cyan,
-                FString::Printf(TEXT("Sun Pitch:%.1f Yaw:%.1f"), Pitch, Yaw));
+        SunLight->SetActorRotation(FRotator(SunPitch, SunYaw, 0.0f));
     }
 }
 

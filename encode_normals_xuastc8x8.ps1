@@ -26,7 +26,7 @@ if ($files.Count -eq 0) {
 
 foreach ($f in $files) {
     $outFile = Join-Path $outDir ($f.BaseName + ".ktx2")
-    & $basisu $f.FullName -ldr_8x8i -normal_map -quality 128 -effort 6 -output_file $outFile 2>&1 | Out-Null
+    & $basisu $f.FullName -ldr_8x8i -quality 128 -effort 6 -output_file $outFile 2>&1 | Out-Null
     if (Test-Path $outFile) {
         Write-Host ("  {0,-40} {1,6:N0} KB" -f $f.BaseName, ((Get-Item $outFile).Length / 1KB))
     } else {
