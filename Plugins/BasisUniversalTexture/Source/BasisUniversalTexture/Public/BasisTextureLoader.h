@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "BasisTextureTypes.h"
 #include "Engine/Texture2D.h"
 #include "BasisTextureLoader.generated.h"
 
@@ -67,12 +68,13 @@ public:
               meta = (DisplayName = "Load Basis Texture"))
     static UTexture2D* LoadBasisTexture(const FString& FilePath, FBasisTranscodeInfo& OutInfo);
 
+    /** Guess texture usage from the source name. Importers use this only as an editable initial value. */
+    UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Basis Universal")
+    static EBasisTextureSemantic GuessTextureSemanticFromName(const FString& SourceName);
+
     /**
      * Transcode .basis or .ktx2 bytes already loaded in memory.
-     * @param SourceData Raw Basis Universal file bytes.
-     * @param SourceName Display/source name used for logging and normal-map detection.
-     * @param OutInfo    Size and format statistics for demo/comparison display.
-     * @return           Transient UTexture2D, or nullptr on failure.
+     * Uses GuessTextureSemanticFromName() for backwards compatibility.
      */
     static UTexture2D* LoadBasisTextureFromMemory(
         const TArray<uint8>& SourceData,
@@ -80,8 +82,23 @@ public:
         FBasisTranscodeInfo& OutInfo);
 
     /**
+     * Transcode .basis or .ktx2 bytes already loaded in memory.
+     * @param SourceData       Raw Basis Universal file bytes.
+     * @param SourceName       Display/source name used for logging.
+     * @param TextureSemantic  Explicit texture usage.
+     * @param OutInfo          Size and format statistics for demo/comparison display.
+     * @return                 Transient UTexture2D, or nullptr on failure.
+     */
+    static UTexture2D* LoadBasisTextureFromMemory(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        FBasisTranscodeInfo& OutInfo);
+
+    /**
      * Transcode Basis Universal bytes to platform-native compressed GPU blocks.
      * This does not create a UTexture2D and can be used to populate a native cache.
+     * Uses GuessTextureSemanticFromName() for backwards compatibility.
      */
     static bool TranscodeBasisTextureToNativeBlocks(
         const TArray<uint8>& SourceData,
@@ -90,12 +107,33 @@ public:
         TArray<uint8>& OutNativeBlocks);
 
     /**
+     * Transcode Basis Universal bytes to platform-native compressed GPU blocks.
+     * This does not create a UTexture2D and can be used to populate a native cache.
+     */
+    static bool TranscodeBasisTextureToNativeBlocks(
+        const TArray<uint8>& SourceData,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic,
+        FBasisTranscodeInfo& OutInfo,
+        TArray<uint8>& OutNativeBlocks);
+
+    /**
      * Create a transient UTexture2D from native compressed GPU blocks.
+     * Uses GuessTextureSemanticFromName() for backwards compatibility.
      */
     static UTexture2D* CreateTextureFromNativeBlocks(
         const TArray<uint8>& NativeBlocks,
         const FBasisTranscodeInfo& Info,
         const FString& SourceName);
+
+    /**
+     * Create a transient UTexture2D from native compressed GPU blocks.
+     */
+    static UTexture2D* CreateTextureFromNativeBlocks(
+        const TArray<uint8>& NativeBlocks,
+        const FBasisTranscodeInfo& Info,
+        const FString& SourceName,
+        EBasisTextureSemantic TextureSemantic);
 
     /**
      * Estimate how large an equivalent BC7 texture would be for a given resolution.

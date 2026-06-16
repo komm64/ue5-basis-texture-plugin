@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "BasisTextureTypes.h"
 #include "Engine/Texture2D.h"
 #include "BasisTexture.generated.h"
 
@@ -58,6 +59,16 @@ public:
     /** Runtime storage policy for this asset. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
     EBasisRuntimeStorageMode RuntimeStorageMode = EBasisRuntimeStorageMode::FootprintOptimized;
+
+    /** Internal version for import/runtime metadata migrations. */
+    UPROPERTY()
+    int32 BasisMetadataVersion = 0;
+
+    /** Texture usage. Imported assets are guessed from the filename, but production assets should verify this explicitly. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Basis Runtime")
+    EBasisTextureSemantic TextureSemantic = EBasisTextureSemantic::Color;
+
+    virtual void PostLoad() override;
 
     /**
      * Transcode the stored Basis Universal data into a transient GPU-ready UTexture2D.

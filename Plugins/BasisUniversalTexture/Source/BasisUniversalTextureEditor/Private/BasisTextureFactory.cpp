@@ -32,13 +32,15 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
     Asset->BasisData.SetNumUninitialized(DataSize);
     FMemory::Memcpy(Asset->BasisData.GetData(), Buffer, DataSize);
     Asset->CompressedSize = DataSize;
+    Asset->BasisMetadataVersion = 1;
+    Asset->TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(InName.ToString());
 
     // Read metadata through the same in-memory path used at runtime.
     {
         FBasisTranscodeInfo Info;
         TArray<uint8> NativeBlocks;
         if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
-                Asset->BasisData, InName.ToString(), Info, NativeBlocks))
+                Asset->BasisData, InName.ToString(), Asset->TextureSemantic, Info, NativeBlocks))
         {
             UE_LOG(LogTemp, Warning, TEXT("BasisTextureFactory: failed to import %s"), *InName.ToString());
             return nullptr;
@@ -52,9 +54,10 @@ UObject* UBasisTextureFactory::FactoryCreateBinary(
     }
 
     UE_LOG(LogTemp, Log,
-        TEXT("BasisTextureFactory: imported %s [%dx%d] %s -> %s | %lld bytes (%.1f KB) | gpu %.1f KB | ratio %.1fx"),
+        TEXT("BasisTextureFactory: imported %s [%dx%d] %s -> %s | semantic=%s | %lld bytes (%.1f KB) | gpu %.1f KB | ratio %.1fx"),
         *InName.ToString(), Asset->Width, Asset->Height, *Asset->SourceFormat,
         *Asset->TranscodedFormat,
+        Asset->TextureSemantic == EBasisTextureSemantic::NormalMap ? TEXT("NormalMap") : TEXT("Color"),
         Asset->CompressedSize, Asset->CompressedSize / 1024.f,
         Asset->TranscodedSize / 1024.f, Asset->GetCompressionRatio());
 

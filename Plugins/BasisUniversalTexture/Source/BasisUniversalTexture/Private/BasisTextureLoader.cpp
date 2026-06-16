@@ -17,7 +17,7 @@ THIRD_PARTY_INCLUDES_END
 // ------------------------------------------------------------------
 // UBasisTextureLoader implementation
 // ------------------------------------------------------------------
-// Normal maps (filename contains "nor"): transcoded to BC7_RGBA.
+// Normal maps: transcoded to BC7_RGBA.
 // Albedo/other: transcoded to BC1_RGB.
 // ------------------------------------------------------------------
 
@@ -55,23 +55,67 @@ UTexture2D* UBasisTextureLoader::LoadBasisTexture(const FString& FilePath, FBasi
     return LoadBasisTextureFromMemory(FileData, FilePath, OutInfo);
 }
 
+EBasisTextureSemantic UBasisTextureLoader::GuessTextureSemanticFromName(const FString& SourceName)
+{
+    const FString BaseName = FPaths::GetBaseFilename(SourceName).ToLower();
+    const bool bLooksLikeNormal =
+        BaseName.Contains(TEXT("_nor_"))
+        || BaseName.EndsWith(TEXT("_nor"))
+        || BaseName.Contains(TEXT("_normal_"))
+        || BaseName.EndsWith(TEXT("_normal"))
+        || BaseName.Contains(TEXT("_nrm_"))
+        || BaseName.EndsWith(TEXT("_nrm"));
+
+    return bLooksLikeNormal
+        ? EBasisTextureSemantic::NormalMap
+        : EBasisTextureSemantic::Color;
+}
+
 UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
     const TArray<uint8>& SourceData,
     const FString& SourceName,
     FBasisTranscodeInfo& OutInfo)
 {
+    return LoadBasisTextureFromMemory(
+        SourceData,
+        SourceName,
+        GuessTextureSemanticFromName(SourceName),
+        OutInfo);
+}
+
+UTexture2D* UBasisTextureLoader::LoadBasisTextureFromMemory(
+    const TArray<uint8>& SourceData,
+    const FString& SourceName,
+    EBasisTextureSemantic TextureSemantic,
+    FBasisTranscodeInfo& OutInfo)
+{
     TArray<uint8> NativeBlocks;
-    if (!TranscodeBasisTextureToNativeBlocks(SourceData, SourceName, OutInfo, NativeBlocks))
+    if (!TranscodeBasisTextureToNativeBlocks(SourceData, SourceName, TextureSemantic, OutInfo, NativeBlocks))
     {
         return nullptr;
     }
 
-    return CreateTextureFromNativeBlocks(NativeBlocks, OutInfo, SourceName);
+    return CreateTextureFromNativeBlocks(NativeBlocks, OutInfo, SourceName, TextureSemantic);
 }
 
 bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
     const TArray<uint8>& SourceData,
     const FString& SourceName,
+    FBasisTranscodeInfo& OutInfo,
+    TArray<uint8>& OutNativeBlocks)
+{
+    return TranscodeBasisTextureToNativeBlocks(
+        SourceData,
+        SourceName,
+        GuessTextureSemanticFromName(SourceName),
+        OutInfo,
+        OutNativeBlocks);
+}
+
+bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
+    const TArray<uint8>& SourceData,
+    const FString& SourceName,
+    EBasisTextureSemantic TextureSemantic,
     FBasisTranscodeInfo& OutInfo,
     TArray<uint8>& OutNativeBlocks)
 {
@@ -88,7 +132,7 @@ bool UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
 
     const void*  pData    = SourceData.GetData();
     const uint32 DataSize = static_cast<uint32>(SourceData.Num());
-    const bool bIsNormalMap = SourceName.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
+    const bool bIsNormalMap = TextureSemantic == EBasisTextureSemantic::NormalMap;
 
     uint32 Width = 0, Height = 0;
 
@@ -257,6 +301,19 @@ UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
     const FBasisTranscodeInfo& Info,
     const FString& SourceName)
 {
+    return CreateTextureFromNativeBlocks(
+        NativeBlocks,
+        Info,
+        SourceName,
+        GuessTextureSemanticFromName(SourceName));
+}
+
+UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
+    const TArray<uint8>& NativeBlocks,
+    const FBasisTranscodeInfo& Info,
+    const FString& SourceName,
+    EBasisTextureSemantic TextureSemantic)
+{
     if (Info.Width <= 0 || Info.Height <= 0 || Info.TranscodedSize <= 0)
     {
         UE_LOG(LogTemp, Warning,
@@ -272,7 +329,7 @@ UTexture2D* UBasisTextureLoader::CreateTextureFromNativeBlocks(
         return nullptr;
     }
 
-    const bool bIsNormalMap = SourceName.Contains(TEXT("_nor_"), ESearchCase::IgnoreCase);
+    const bool bIsNormalMap = TextureSemantic == EBasisTextureSemantic::NormalMap;
     EPixelFormat PixelFmt = PF_Unknown;
     if (Info.TranscodedFormat == TEXT("BC7_RGBA"))
     {

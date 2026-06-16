@@ -12,20 +12,38 @@ namespace
 {
     constexpr uint32 NativeCacheMagic = 0x424E5443; // BNTC
     constexpr int32 NativeCacheVersion = 2;
-    static const TCHAR* NativeCacheTargetProfile = TEXT("desktop_bc1_bc7");
+    constexpr int32 BasisMetadataCurrentVersion = 1;
 
-    FString GetNativeCachePath(const UBasisTexture* Texture)
+    FString GetNativeCacheTargetProfile(EBasisTextureSemantic TextureSemantic)
+    {
+        return TextureSemantic == EBasisTextureSemantic::NormalMap
+            ? TEXT("desktop_bc7_normal")
+            : TEXT("desktop_bc1_color");
+    }
+
+    FString BuildNativeCachePath(const UBasisTexture* Texture, const FString& TargetProfile)
     {
         const uint32 DataCrc = Texture->BasisData.Num() > 0
             ? FCrc::MemCrc32(Texture->BasisData.GetData(), Texture->BasisData.Num())
             : 0;
         const FString SafeName = FPaths::MakeValidFileName(Texture->GetName());
         return FPaths::ProjectSavedDir() / TEXT("BasisNativeCache")
-            / FString::Printf(TEXT("%s_%08x_%s.ubasisnative"), *SafeName, DataCrc, NativeCacheTargetProfile);
+            / FString::Printf(TEXT("%s_%08x_%s.ubasisnative"), *SafeName, DataCrc, *TargetProfile);
+    }
+
+    FString GetNativeCachePath(const UBasisTexture* Texture)
+    {
+        return BuildNativeCachePath(Texture, GetNativeCacheTargetProfile(Texture->TextureSemantic));
+    }
+
+    FString GetLegacyNativeCachePath(const UBasisTexture* Texture)
+    {
+        return BuildNativeCachePath(Texture, TEXT("desktop_bc1_bc7"));
     }
 
     bool SaveNativeCache(
         const FString& CachePath,
+        const FString& TargetProfile,
         const FBasisTranscodeInfo& Info,
         const TArray<uint8>& NativeBlocks)
     {
@@ -33,7 +51,7 @@ namespace
 
         uint32 Magic = NativeCacheMagic;
         int32 Version = NativeCacheVersion;
-        FString TargetProfile = NativeCacheTargetProfile;
+        FString CachedTargetProfile = TargetProfile;
         int32 Width = Info.Width;
         int32 Height = Info.Height;
         int32 MipLevels = Info.MipLevels;
@@ -46,7 +64,7 @@ namespace
 
         Ar << Magic;
         Ar << Version;
-        Ar << TargetProfile;
+        Ar << CachedTargetProfile;
         Ar << Width;
         Ar << Height;
         Ar << MipLevels;
@@ -81,6 +99,7 @@ namespace
 
     bool LoadNativeCache(
         const FString& CachePath,
+        const FString& ExpectedTargetProfile,
         FBasisTranscodeInfo& OutInfo,
         TArray<uint8>& OutNativeBlocks)
     {
@@ -94,7 +113,7 @@ namespace
 
         uint32 Magic = 0;
         int32 Version = 0;
-        FString TargetProfile;
+        FString CachedTargetProfile;
         int32 Width = 0;
         int32 Height = 0;
         int32 MipLevels = 0;
@@ -107,7 +126,7 @@ namespace
 
         Ar << Magic;
         Ar << Version;
-        Ar << TargetProfile;
+        Ar << CachedTargetProfile;
         Ar << Width;
         Ar << Height;
         Ar << MipLevels;
@@ -121,7 +140,7 @@ namespace
         if (Ar.IsError()
             || Magic != NativeCacheMagic
             || Version != NativeCacheVersion
-            || TargetProfile != NativeCacheTargetProfile)
+            || CachedTargetProfile != ExpectedTargetProfile)
         {
             return false;
         }
@@ -157,6 +176,7 @@ namespace
     bool BuildNativeCache(
         const UBasisTexture* Texture,
         const FString& CachePath,
+        const FString& TargetProfile,
         FBasisTranscodeInfo& OutInfo,
         TArray<uint8>& OutNativeBlocks,
         bool& bOutCacheSaved)
@@ -164,12 +184,12 @@ namespace
         bOutCacheSaved = false;
 
         if (!UBasisTextureLoader::TranscodeBasisTextureToNativeBlocks(
-                Texture->BasisData, Texture->GetName(), OutInfo, OutNativeBlocks))
+                Texture->BasisData, Texture->GetName(), Texture->TextureSemantic, OutInfo, OutNativeBlocks))
         {
             return false;
         }
 
-        if (SaveNativeCache(CachePath, OutInfo, OutNativeBlocks))
+        if (SaveNativeCache(CachePath, TargetProfile, OutInfo, OutNativeBlocks))
         {
             UE_LOG(LogTemp, Log, TEXT("UBasisTexture: native cache saved: %s"), *CachePath);
             bOutCacheSaved = true;
@@ -180,6 +200,17 @@ namespace
         }
 
         return true;
+    }
+}
+
+void UBasisTexture::PostLoad()
+{
+    Super::PostLoad();
+
+    if (BasisMetadataVersion < BasisMetadataCurrentVersion)
+    {
+        TextureSemantic = UBasisTextureLoader::GuessTextureSemanticFromName(GetName());
+        BasisMetadataVersion = BasisMetadataCurrentVersion;
     }
 }
 
@@ -194,16 +225,17 @@ UTexture2D* UBasisTexture::Transcode()
     FBasisTranscodeInfo Info;
     if (RuntimeStorageMode == EBasisRuntimeStorageMode::FootprintOptimized)
     {
-        return UBasisTextureLoader::LoadBasisTextureFromMemory(BasisData, GetName(), Info);
+        return UBasisTextureLoader::LoadBasisTextureFromMemory(BasisData, GetName(), TextureSemantic, Info);
     }
 
     TArray<uint8> NativeBlocks;
+    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic);
     const FString CachePath = GetNativeCachePath(this);
-    if (LoadNativeCache(CachePath, Info, NativeBlocks))
+    if (LoadNativeCache(CachePath, TargetProfile, Info, NativeBlocks))
     {
         UE_LOG(LogTemp, Log, TEXT("UBasisTexture::Transcode: native cache hit: %s"), *CachePath);
         if (UTexture2D* CachedTexture =
-                UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName()))
+                UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName(), TextureSemantic))
         {
             return CachedTexture;
         }
@@ -215,12 +247,12 @@ UTexture2D* UBasisTexture::Transcode()
     }
 
     bool bCacheSaved = false;
-    if (!BuildNativeCache(this, CachePath, Info, NativeBlocks, bCacheSaved))
+    if (!BuildNativeCache(this, CachePath, TargetProfile, Info, NativeBlocks, bCacheSaved))
     {
         return nullptr;
     }
 
-    return UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName());
+    return UBasisTextureLoader::CreateTextureFromNativeBlocks(NativeBlocks, Info, GetName(), TextureSemantic);
 }
 
 bool UBasisTexture::WarmNativeCache()
@@ -233,8 +265,9 @@ bool UBasisTexture::WarmNativeCache()
 
     FBasisTranscodeInfo Info;
     TArray<uint8> NativeBlocks;
+    const FString TargetProfile = GetNativeCacheTargetProfile(TextureSemantic);
     const FString CachePath = GetNativeCachePath(this);
-    if (LoadNativeCache(CachePath, Info, NativeBlocks))
+    if (LoadNativeCache(CachePath, TargetProfile, Info, NativeBlocks))
     {
         return true;
     }
@@ -244,7 +277,7 @@ bool UBasisTexture::WarmNativeCache()
     }
 
     bool bCacheSaved = false;
-    if (!BuildNativeCache(this, CachePath, Info, NativeBlocks, bCacheSaved))
+    if (!BuildNativeCache(this, CachePath, TargetProfile, Info, NativeBlocks, bCacheSaved))
     {
         return false;
     }
@@ -254,12 +287,24 @@ bool UBasisTexture::WarmNativeCache()
 bool UBasisTexture::ClearNativeCache()
 {
     const FString CachePath = GetNativeCachePath(this);
+    const FString LegacyCachePath = GetLegacyNativeCachePath(this);
+    bool bSucceeded = true;
+
     if (!FPaths::FileExists(CachePath))
     {
-        return true;
+        if (FPaths::FileExists(LegacyCachePath))
+        {
+            bSucceeded = IFileManager::Get().Delete(*LegacyCachePath) && bSucceeded;
+        }
+        return bSucceeded;
     }
 
-    return IFileManager::Get().Delete(*CachePath);
+    bSucceeded = IFileManager::Get().Delete(*CachePath) && bSucceeded;
+    if (LegacyCachePath != CachePath && FPaths::FileExists(LegacyCachePath))
+    {
+        bSucceeded = IFileManager::Get().Delete(*LegacyCachePath) && bSucceeded;
+    }
+    return bSucceeded;
 }
 
 bool UBasisTexture::HasNativeCache() const
